@@ -13,8 +13,13 @@ import {
   Keyboard,
   Platform,
 } from 'react-native';
-import MapView, { Marker, Circle, Region, MapType } from 'react-native-maps';
+import MapView, { Marker, Circle, Polyline, Region, MapType } from 'react-native-maps';
 import * as Location from 'expo-location';
+
+interface Coordinate {
+  latitude: number;
+  longitude: number;
+}
 
 interface ParkingSpot {
   id: string;
@@ -23,297 +28,399 @@ interface ParkingSpot {
   pricePerHour: number;
   label: string;
   badge: string;
-  walkingTime: string;
-  distance: string;
+  distanceToDestMeters: number;
+  walkingTimeMinutes: number;
   venstertijden: string;
-  coordinate: {
-    latitude: number;
-    longitude: number;
-  };
+  coordinate: Coordinate;
   color: string;
   description: string;
 }
 
-interface SearchDestination {
-  id: string;
+interface DestinationTarget {
   name: string;
   subtitle: string;
-  distance: string;
-  coordinate: {
-    latitude: number;
-    longitude: number;
-  };
+  coordinate: Coordinate;
 }
 
-// Default Fallback (Central Amsterdam coordinates)
-const DEFAULT_COORDS = {
+interface TurnManeuver {
+  instruction: string;
+  street: string;
+  distanceText: string;
+  icon: string;
+}
+
+const DEFAULT_COORDS: Coordinate = {
   latitude: 52.3676,
   longitude: 4.9041,
-  latitudeDelta: 0.015,
-  longitudeDelta: 0.015,
 };
+
+function getDistanceInMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371e3;
+  const toRad = (val: number) => (val * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c);
+}
+
+function generateRouteWaypoints(start: Coordinate, end: Coordinate, steps = 8): Coordinate[] {
+  const points: Coordinate[] = [start];
+  for (let i = 1; i <= steps; i++) {
+    const ratio = i / (steps + 1);
+    const latBend = Math.sin(ratio * Math.PI) * 0.0007;
+    const lonBend = Math.cos(ratio * Math.PI) * 0.0005;
+    points.push({
+      latitude: start.latitude + (end.latitude - start.latitude) * ratio + (i % 2 === 0 ? latBend : -latBend * 0.4),
+      longitude: start.longitude + (end.longitude - start.longitude) * ratio + (i % 2 === 1 ? lonBend : -lonBend * 0.4),
+    });
+  }
+  points.push(end);
+  return points;
+}
 
 export default function MapScreen() {
   const mapRef = useRef<MapView | null>(null);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
-  const [region, setRegion] = useState<Region>(DEFAULT_COORDS);
+  const [region, setRegion] = useState<Region>({
+    ...DEFAULT_COORDS,
+    latitudeDelta: 0.015,
+    longitudeDelta: 0.015,
+  });
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Search & Filter State (Google Maps / Apple Maps style)
+  // Search & Navigation State
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
-  const [selectedFilter, setSelectedFilter] = useState<'all' | 'free' | 'cheap' | 'hazard'>('all');
+  const [destination, setDestination] = useState<DestinationTarget | null>(null);
+  const [optimalSpot, setOptimalSpot] = useState<ParkingSpot | null>(null);
   const [selectedSpot, setSelectedSpot] = useState<ParkingSpot | null>(null);
 
-  // Map settings
+  // Clutter-Free Separate Menu State for Hazard & Map Layers
+  const [isToolsMenuOpen, setIsToolsMenuOpen] = useState(false);
+
+  // In-App Navigation State
+  const [isNavigating, setIsNavigating] = useState(false);
+  const [navPhase, setNavPhase] = useState<'driving' | 'walking'>('driving');
+  const [currentSpeed, setCurrentSpeed] = useState(48); // km/h
+  const [isVoiceMuted, setIsVoiceMuted] = useState(false);
+  const [simStep, setSimStep] = useState(0);
+
+  // Fixed TS2694 error: use ReturnType<typeof setInterval> instead of NodeJS.Timeout
+  const [simIntervalId, setSimIntervalId] = useState<ReturnType<typeof setInterval> | null>(null);
+
+  // Map display settings
   const [mapType, setMapType] = useState<MapType>('standard');
-  const [showTraffic, setShowTraffic] = useState(false);
+  const [showTraffic, setShowTraffic] = useState(true);
 
-  // 1. Location Permissions & Initial Tracking
-  useEffect(() => {
-    let isMounted = true;
-
-    async function initializeLocation() {
-      try {
-        setIsLoading(true);
-        setErrorMsg(null);
-
-        const { status } = await Location.requestForegroundPermissionsAsync();
-
-        if (status !== Location.PermissionStatus.GRANTED) {
-          if (isMounted) {
-            setErrorMsg(
-              'Location permission denied. Map is running in manual exploration mode.'
-            );
-            setIsLoading(false);
-          }
-          return;
-        }
-
-        const currentLocation = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-
-        if (isMounted) {
-          setLocation(currentLocation);
-
-          const newRegion: Region = {
-            latitude: currentLocation.coords.latitude,
-            longitude: currentLocation.coords.longitude,
-            latitudeDelta: 0.012,
-            longitudeDelta: 0.012,
-          };
-
-          setRegion(newRegion);
-          setIsLoading(false);
-
-          // Animate smoothly to current position
-          if (mapRef.current) {
-            mapRef.current.animateToRegion(newRegion, 800);
-          }
-        }
-      } catch (err) {
-        if (isMounted) {
-          setErrorMsg('Unable to retrieve GPS location. Showing default area.');
-          setIsLoading(false);
-        }
-      }
-    }
-
-    initializeLocation();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const centerCoords = location
+  const userCoord: Coordinate = location
     ? {
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
       }
-    : {
-        latitude: DEFAULT_COORDS.latitude,
-        longitude: DEFAULT_COORDS.longitude,
-      };
+    : DEFAULT_COORDS;
 
-  // 2. Realistic Nearby Parking Spots (Generated around user coordinates)
-  const parkingSpots: ParkingSpot[] = useMemo(() => {
-    const lat = centerCoords.latitude;
-    const lng = centerCoords.longitude;
+  const [vehiclePosition, setVehiclePosition] = useState<Coordinate>(userCoord);
 
-    return [
+  useEffect(() => {
+    setVehiclePosition(userCoord);
+  }, [userCoord.latitude, userCoord.longitude]);
+
+  // Request GPS permission on mount
+  useEffect(() => {
+    let isMounted = true;
+    let locSubscription: Location.LocationSubscription | null = null;
+
+    async function initLocation() {
+      try {
+        setIsLoading(true);
+        const { status } = await Location.requestForegroundPermissionsAsync();
+
+        if (status === Location.PermissionStatus.GRANTED) {
+          const currentLoc = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+
+          if (isMounted) {
+            setLocation(currentLoc);
+            const initialRegion: Region = {
+              latitude: currentLoc.coords.latitude,
+              longitude: currentLoc.coords.longitude,
+              latitudeDelta: 0.012,
+              longitudeDelta: 0.012,
+            };
+            setRegion(initialRegion);
+            mapRef.current?.animateToRegion(initialRegion, 800);
+          }
+
+          locSubscription = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.High,
+              timeInterval: 1500,
+              distanceInterval: 3,
+            },
+            (updatedLoc) => {
+              if (isMounted) {
+                setLocation(updatedLoc);
+                if (updatedLoc.coords.speed && updatedLoc.coords.speed > 0) {
+                  setCurrentSpeed(Math.round(updatedLoc.coords.speed * 3.6));
+                }
+              }
+            }
+          );
+        }
+      } catch (err) {
+        // Fallback to default coordinates
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    }
+
+    initLocation();
+
+    return () => {
+      isMounted = false;
+      locSubscription?.remove();
+      if (simIntervalId) clearInterval(simIntervalId);
+    };
+  }, []);
+
+  const scanCenter: Coordinate = destination ? destination.coordinate : userCoord;
+
+  // Candidate parking spots in 750m radius
+  const nearbySpots: ParkingSpot[] = useMemo(() => {
+    const dLat = scanCenter.latitude;
+    const dLon = scanCenter.longitude;
+
+    const spotsRaw = [
       {
-        id: 'spot-1',
-        title: 'Kerkstraat P-Zone (100% Free)',
-        type: 'free',
+        id: 'spot-free-1',
+        title: 'Singel Free Parking Strip',
+        type: 'free' as const,
         pricePerHour: 0,
         label: 'FREE',
         badge: '100% FREE',
-        walkingTime: '3 min walk',
-        distance: '230m away',
-        venstertijden: 'Free 24/7 · Municipal free parking strip',
-        color: '#10b981', // emerald-500
-        coordinate: { latitude: lat + 0.0022, longitude: lng + 0.0018 },
-        description: 'Roadside non-permit parking strip. 4 spaces usually free.',
+        venstertijden: 'Free 24/7 · Municipal non-metered strip',
+        color: '#10b981',
+        offset: { lat: 0.0019, lon: 0.0014 },
+        description: 'Roadside municipal free zone. 3 free spots usually available.',
       },
       {
-        id: 'spot-2',
-        title: 'Prinsengracht Blue Zone',
-        type: 'blue',
+        id: 'spot-blue-1',
+        title: 'Prins Hendrikkade Blue Zone',
+        type: 'blue' as const,
         pricePerHour: 0,
         label: 'BLUE 2H',
         badge: 'BLUE ZONE',
-        walkingTime: '5 min walk',
-        distance: '420m away',
-        venstertijden: 'Max 2 hours with parking disc (09:00 - 18:00)',
-        color: '#2563eb', // blue-600
-        coordinate: { latitude: lat - 0.0028, longitude: lng + 0.0035 },
+        venstertijden: 'Max 2h with disc · Free after 18:00 & Sundays',
+        color: '#2563eb',
+        offset: { lat: -0.0022, lon: 0.0025 },
         description: 'Blue zone parking disc required between 09:00 and 18:00.',
       },
       {
-        id: 'spot-3',
-        title: 'Westerdok Municipal Cheap Zone',
-        type: 'cheap',
+        id: 'spot-cheap-1',
+        title: 'Westerdok Municipal Low-Tariff',
+        type: 'cheap' as const,
         pricePerHour: 1.5,
         label: '€1.50/h',
         badge: 'CHEAPEST PAID',
-        walkingTime: '7 min walk',
-        distance: '610m away',
-        venstertijden: 'Free after 19:00 & Sundays · Normally €1.50/h',
-        color: '#0284c7', // sky-600
-        coordinate: { latitude: lat + 0.0038, longitude: lng - 0.0029 },
-        description: 'Low-tariff municipal zone. Saves up to €4.50/h vs city center.',
+        venstertijden: '€1.50/h · 100% Free after 19:00 and all Sunday',
+        color: '#0284c7',
+        offset: { lat: 0.0034, lon: -0.0021 },
+        description: 'Low-tariff municipal zone. Saves up to €5.50/h vs destination roadside tariff.',
       },
       {
-        id: 'spot-4',
-        title: 'Q-Park Center Garage',
-        type: 'paid',
-        pricePerHour: 4.8,
-        label: '€4.80/h',
-        badge: 'COVERED GARAGE',
-        walkingTime: '9 min walk',
-        distance: '720m away',
-        venstertijden: 'Open 24/7 · Height clearance 2.10m · EV Chargers',
-        color: '#f59e0b', // amber-500
-        coordinate: { latitude: lat - 0.0041, longitude: lng - 0.0032 },
-        description: 'Underground secure garage with 8 EV charging bays.',
+        id: 'spot-garage-1',
+        title: 'Q-Park City Center Garage',
+        type: 'paid' as const,
+        pricePerHour: 5.5,
+        label: '€5.50/h',
+        badge: 'GARAGE',
+        venstertijden: 'Open 24/7 · Covered · EV Charging bays',
+        color: '#f59e0b',
+        offset: { lat: 0.0012, lon: -0.0038 },
+        description: 'Underground secured facility right in the core.',
       },
       {
         id: 'hazard-1',
         title: 'Active Parking Warden / Controle',
-        type: 'hazard',
+        type: 'hazard' as const,
         pricePerHour: 0,
         label: '⚠️ WARDEN',
-        badge: 'HAZARD ALERT',
-        walkingTime: 'Alert from driver 4m ago',
-        distance: '310m away',
-        venstertijden: 'Scan-car spotted checking licenses on Singel',
-        color: '#dc2626', // red-600
-        coordinate: { latitude: lat + 0.0015, longitude: lng - 0.0019 },
-        description: 'Municipal scan car active on this street right now.',
+        badge: 'HAZARD',
+        venstertijden: 'Scan-car reported 3m ago on this road',
+        color: '#dc2626',
+        offset: { lat: -0.0012, lon: 0.0016 },
+        description: 'Municipal license plate scanner car currently patrolling here.',
       },
     ];
-  }, [centerCoords.latitude, centerCoords.longitude]);
 
-  // Filtered spots based on category chip selection
-  const filteredSpots = useMemo(() => {
-    if (selectedFilter === 'free') {
-      return parkingSpots.filter((s) => s.type === 'free' || s.type === 'blue');
+    return spotsRaw.map((s) => {
+      const spotCoord: Coordinate = {
+        latitude: dLat + s.offset.lat,
+        longitude: dLon + s.offset.lon,
+      };
+      const distMeters = getDistanceInMeters(dLat, dLon, spotCoord.latitude, spotCoord.longitude);
+      const walkMin = Math.max(1, Math.round(distMeters / 75));
+
+      return {
+        id: s.id,
+        title: s.title,
+        type: s.type,
+        pricePerHour: s.pricePerHour,
+        label: s.label,
+        badge: s.badge,
+        distanceToDestMeters: distMeters,
+        walkingTimeMinutes: walkMin,
+        venstertijden: s.venstertijden,
+        coordinate: spotCoord,
+        color: s.color,
+        description: s.description,
+      };
+    });
+  }, [scanCenter]);
+
+  // Automatic Best Parking Selection Algorithm
+  const bestParkingCandidate = useMemo(() => {
+    const candidates = nearbySpots.filter(
+      (s) => s.type !== 'hazard' && s.distanceToDestMeters <= 750
+    );
+    if (candidates.length === 0) return null;
+
+    // 1. Free spots
+    const freeSpots = candidates
+      .filter((s) => s.type === 'free')
+      .sort((a, b) => a.distanceToDestMeters - b.distanceToDestMeters);
+    if (freeSpots.length > 0) return freeSpots[0];
+
+    // 2. Blue zones
+    const blueSpots = candidates
+      .filter((s) => s.type === 'blue')
+      .sort((a, b) => a.distanceToDestMeters - b.distanceToDestMeters);
+    if (blueSpots.length > 0) return blueSpots[0];
+
+    // 3. Cheapest paid
+    const paidSpots = [...candidates].sort((a, b) => {
+      if (a.pricePerHour !== b.pricePerHour) return a.pricePerHour - b.pricePerHour;
+      return a.distanceToDestMeters - b.distanceToDestMeters;
+    });
+    return paidSpots[0] || null;
+  }, [nearbySpots]);
+
+  useEffect(() => {
+    if (destination && bestParkingCandidate && !isNavigating) {
+      setOptimalSpot(bestParkingCandidate);
+      setSelectedSpot(bestParkingCandidate);
+
+      setTimeout(() => {
+        mapRef.current?.fitToCoordinates(
+          [userCoord, bestParkingCandidate.coordinate, destination.coordinate],
+          {
+            edgePadding: { top: 140, right: 60, bottom: 320, left: 60 },
+            animated: true,
+          }
+        );
+      }, 350);
     }
-    if (selectedFilter === 'cheap') {
-      return parkingSpots.filter((s) => s.type === 'cheap' || s.type === 'free');
+  }, [destination, bestParkingCandidate, isNavigating]);
+
+  // Route Polylines
+  const drivingPolyline = useMemo(() => {
+    if (!destination || !optimalSpot) return [];
+    return generateRouteWaypoints(userCoord, optimalSpot.coordinate, 10);
+  }, [userCoord, destination, optimalSpot]);
+
+  const walkingPolyline = useMemo(() => {
+    if (!destination || !optimalSpot) return [];
+    return generateRouteWaypoints(optimalSpot.coordinate, destination.coordinate, 5);
+  }, [destination, optimalSpot]);
+
+  // Turn-by-Turn Maneuvers along the in-app route
+  const currentManeuver: TurnManeuver = useMemo(() => {
+    if (navPhase === 'walking') {
+      return {
+        instruction: `Walk ${optimalSpot?.distanceToDestMeters || 180}m to ${destination?.name || 'Destination'}`,
+        street: 'Pedestrian Walkway',
+        distanceText: `${optimalSpot?.distanceToDestMeters || 180}m`,
+        icon: '🚶',
+      };
     }
-    if (selectedFilter === 'hazard') {
-      return parkingSpots.filter((s) => s.type === 'hazard');
+
+    if (simStep === 0) {
+      return {
+        instruction: 'Head north on current street towards canal',
+        street: 'Prins Hendrikkade',
+        distanceText: '250m',
+        icon: '⬆️',
+      };
+    } else if (simStep === 1) {
+      return {
+        instruction: 'Turn right at the intersection onto Singel',
+        street: 'Singel Canal',
+        distanceText: '120m',
+        icon: '↱',
+      };
+    } else if (simStep === 2) {
+      return {
+        instruction: 'Continue straight towards Free Parking Zone',
+        street: 'Singel Free Parking Strip',
+        distanceText: '80m',
+        icon: '⬆️',
+      };
+    } else {
+      return {
+        instruction: `Arrive at ${optimalSpot?.title || 'Free Parking Space'} on the right!`,
+        street: 'Destination Parking Space',
+        distanceText: 'Arrived',
+        icon: '🅿️',
+      };
     }
-    return parkingSpots;
-  }, [parkingSpots, selectedFilter]);
+  }, [navPhase, simStep, optimalSpot, destination]);
 
-  // Destination Search Suggestions (Google / Apple Maps style)
-  const popularDestinations: SearchDestination[] = useMemo(
-    () => [
-      {
-        id: 'dest-1',
-        name: 'Centraal Station',
-        subtitle: 'Stationsplein, Amsterdam · Public Transit Hub',
-        distance: '850m',
-        coordinate: {
-          latitude: centerCoords.latitude + 0.0045,
-          longitude: centerCoords.longitude + 0.002,
-        },
-      },
-      {
-        id: 'dest-2',
-        name: 'Dam Square & Royal Palace',
-        subtitle: 'City Center · High Parking Tariff Zone',
-        distance: '1.2 km',
-        coordinate: {
-          latitude: centerCoords.latitude - 0.003,
-          longitude: centerCoords.longitude + 0.001,
-        },
-      },
-      {
-        id: 'dest-3',
-        name: 'Museumplein & Van Gogh Museum',
-        subtitle: 'Museumkwartier · Blue zone borders',
-        distance: '2.4 km',
-        coordinate: {
-          latitude: centerCoords.latitude - 0.007,
-          longitude: centerCoords.longitude - 0.004,
-        },
-      },
-    ],
-    [centerCoords]
-  );
-
-  const handleSelectDestination = (dest: SearchDestination) => {
-    setSearchQuery(dest.name);
-    setIsSearchFocused(false);
-    Keyboard.dismiss();
-
-    const targetRegion: Region = {
-      latitude: dest.coordinate.latitude,
-      longitude: dest.coordinate.longitude,
-      latitudeDelta: 0.01,
-      longitudeDelta: 0.01,
-    };
-
-    setRegion(targetRegion);
-    mapRef.current?.animateToRegion(targetRegion, 900);
-  };
-
+  // 1. Center to your location button handler (Kept on screen)
   const handleRecenter = () => {
-    if (location && mapRef.current) {
-      mapRef.current.animateToRegion(
-        {
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        },
-        600
-      );
+    const target = isNavigating ? vehiclePosition : userCoord;
+    if (mapRef.current) {
+      if (isNavigating) {
+        mapRef.current.animateCamera(
+          {
+            center: target,
+            pitch: 55,
+            heading: 25,
+            zoom: 18,
+          },
+          { duration: 600 }
+        );
+      } else {
+        mapRef.current.animateToRegion(
+          {
+            latitude: target.latitude,
+            longitude: target.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          },
+          600
+        );
+      }
     }
   };
 
-  const toggleMapType = () => {
-    setMapType((prev) => (prev === 'standard' ? 'satellite' : 'standard'));
-  };
-
+  // 2. Report Stuff (Moved inside separate menu)
   const handleReportHazard = () => {
+    setIsToolsMenuOpen(false);
     Alert.alert(
       '⚠️ Report Parking Hazard',
-      'Select a hazard to broadcast in real time to nearby ParkNavigator drivers:',
+      'Select a hazard to broadcast in real time to nearby drivers:',
       [
         {
           text: '👮 Parking Warden (Scan-auto / Handhaving)',
-          onPress: () => Alert.alert('Reported', 'Hazard broadcasted to live feed.'),
+          onPress: () => Alert.alert('Reported', 'Hazard alert broadcasted to live feed.'),
         },
         {
           text: '🅿️ Full Blue Zone (No spots left)',
-          onPress: () => Alert.alert('Reported', 'Blue zone marked full.'),
+          onPress: () => Alert.alert('Reported', 'Blue zone marked 100% full.'),
         },
         {
           text: '🚧 Road Closure / Work',
@@ -325,18 +432,126 @@ export default function MapScreen() {
     );
   };
 
+  // 3. Third Button: Map Layers & Traffic (Moved inside separate menu)
+  const handleToggleMapType = () => {
+    setMapType((prev) => (prev === 'standard' ? 'satellite' : 'standard'));
+  };
+
+  const handleToggleTraffic = () => {
+    setShowTraffic((prev) => !prev);
+  };
+
+  // Start In-App Navigation
+  const handleStartInAppNavigation = () => {
+    if (!destination || !optimalSpot) return;
+    setIsNavigating(true);
+    setNavPhase('driving');
+    setSimStep(0);
+    setIsToolsMenuOpen(false);
+
+    mapRef.current?.animateCamera(
+      {
+        center: userCoord,
+        pitch: 55,
+        heading: 25,
+        altitude: 400,
+        zoom: 18,
+      },
+      { duration: 1000 }
+    );
+
+    if (simIntervalId) clearInterval(simIntervalId);
+    let step = 0;
+    const interval = setInterval(() => {
+      step++;
+      if (step < drivingPolyline.length) {
+        setSimStep(step);
+        const nextPoint = drivingPolyline[step];
+        setVehiclePosition(nextPoint);
+        mapRef.current?.animateCamera(
+          {
+            center: nextPoint,
+            pitch: 55,
+            heading: (step * 20) % 360,
+            zoom: 18.2,
+          },
+          { duration: 1400 }
+        );
+      } else {
+        clearInterval(interval);
+        setNavPhase('walking');
+        setVehiclePosition(optimalSpot.coordinate);
+        Alert.alert(
+          '🅿️ Arrived at Free Parking!',
+          `You have reached ${optimalSpot.title}.\nNow walking ${optimalSpot.distanceToDestMeters}m to ${destination.name}.`,
+          [{ text: 'Start Walking Leg', onPress: () => {} }]
+        );
+      }
+    }, 2500);
+
+    setSimIntervalId(interval);
+  };
+
+  const handleStopNavigation = () => {
+    if (simIntervalId) clearInterval(simIntervalId);
+    setIsNavigating(false);
+    setNavPhase('driving');
+    setSimStep(0);
+    setVehiclePosition(userCoord);
+
+    mapRef.current?.animateCamera(
+      {
+        center: userCoord,
+        pitch: 0,
+        heading: 0,
+        zoom: 15,
+      },
+      { duration: 800 }
+    );
+  };
+
+  const destinationsCatalog: DestinationTarget[] = useMemo(
+    () => [
+      {
+        name: 'Centraal Station',
+        subtitle: 'Stationsplein 1 · Auto-routes to Singel free parking',
+        coordinate: {
+          latitude: userCoord.latitude + 0.0075,
+          longitude: userCoord.longitude + 0.0035,
+        },
+      },
+      {
+        name: 'Dam Square & Royal Palace',
+        subtitle: 'Amsterdam City Center · High tariff zone',
+        coordinate: {
+          latitude: userCoord.latitude - 0.0055,
+          longitude: userCoord.longitude + 0.002,
+        },
+      },
+      {
+        name: 'Museumplein / Rijksmuseum',
+        subtitle: 'Museumkwartier · Cheap parking zone',
+        coordinate: {
+          latitude: userCoord.latitude - 0.011,
+          longitude: userCoord.longitude - 0.005,
+        },
+      },
+    ],
+    [userCoord]
+  );
+
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle="light-content" />
 
-      {/* ================= MAP COMPONENT ================= */}
+      {/* ================= 1. MAP VIEW (Using StyleSheet.absoluteFill) ================= */}
       <MapView
         ref={mapRef}
         style={StyleSheet.absoluteFill}
         initialRegion={region}
         mapType={mapType}
         showsTraffic={showTraffic}
-        showsUserLocation={true}
+        showsUserLocation={!isNavigating}
         showsMyLocationButton={false}
         showsCompass={true}
         showsScale={true}
@@ -346,330 +561,395 @@ export default function MapScreen() {
         rotateEnabled={true}
         pitchEnabled={true}
         onPress={() => {
-          setSelectedSpot(null);
-          setIsSearchFocused(false);
-          Keyboard.dismiss();
+          setIsToolsMenuOpen(false);
+          if (!isNavigating) {
+            setSelectedSpot(null);
+            setIsSearchFocused(false);
+            Keyboard.dismiss();
+          }
         }}
       >
-        {/* 750m Smart Scanning Radius Circle */}
-        <Circle
-          center={centerCoords}
-          radius={750}
-          strokeWidth={2}
-          strokeColor="rgba(59, 130, 246, 0.7)"
-          fillColor="rgba(59, 130, 246, 0.07)"
-        />
+        {/* 750m Scan Circle */}
+        {!isNavigating && (
+          <Circle
+            center={scanCenter}
+            radius={750}
+            strokeWidth={2}
+            strokeColor="rgba(59, 130, 246, 0.7)"
+            fillColor="rgba(59, 130, 246, 0.06)"
+          />
+        )}
 
-        {/* Interactive Parking Spots & Hazards */}
-        {filteredSpots.map((spot) => (
-          <Marker
-            key={spot.id}
-            coordinate={spot.coordinate}
-            onPress={() => setSelectedSpot(spot)}
-            tracksViewChanges={false}
-          >
-            <View
-              style={[
-                styles.markerContainer,
-                {
-                  borderColor: spot.color,
-                  backgroundColor: selectedSpot?.id === spot.id ? spot.color : '#ffffff',
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.markerLabel,
-                  {
-                    color: selectedSpot?.id === spot.id ? '#ffffff' : spot.color,
-                  },
-                ]}
-              >
-                {spot.label}
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.markerArrow,
-                {
-                  borderTopColor: selectedSpot?.id === spot.id ? spot.color : '#ffffff',
-                },
-              ]}
+        {/* Polylines */}
+        {destination && optimalSpot && (
+          <>
+            <Polyline
+              coordinates={drivingPolyline}
+              strokeColor="#2563eb"
+              strokeWidth={isNavigating ? 7 : 5}
             />
+            <Polyline
+              coordinates={walkingPolyline}
+              strokeColor="#10b981"
+              strokeWidth={4}
+              lineDashPattern={[6, 4]}
+            />
+          </>
+        )}
+
+        {/* Destination Target Marker */}
+        {destination && (
+          <Marker coordinate={destination.coordinate} title={destination.name}>
+            <View style={styles.destinationMarker}>
+              <Text style={styles.destMarkerIcon}>🏁</Text>
+            </View>
           </Marker>
-        ))}
+        )}
+
+        {/* Optimal Free/Cheapest Parking Spot Marker */}
+        {optimalSpot && (
+          <Marker
+            coordinate={optimalSpot.coordinate}
+            title={optimalSpot.title}
+            description={optimalSpot.badge}
+            zIndex={30}
+          >
+            <View style={[styles.parkingSpotMarker, { backgroundColor: optimalSpot.color }]}>
+              <Text style={styles.parkingSpotText}>{optimalSpot.label}</Text>
+            </View>
+            <View style={[styles.markerArrow, { borderTopColor: optimalSpot.color }]} />
+          </Marker>
+        )}
+
+        {/* Active Vehicle Marker during In-App Navigation */}
+        {isNavigating && (
+          <Marker coordinate={vehiclePosition} zIndex={40} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={styles.activeVehicleMarker}>
+              <View style={styles.vehiclePuckGlow} />
+              <View style={styles.vehiclePuck}>
+                <Text style={styles.vehiclePuckIcon}>
+                  {navPhase === 'driving' ? '🚗' : '🚶'}
+                </Text>
+              </View>
+            </View>
+          </Marker>
+        )}
       </MapView>
 
-      {/* ================= TOP FLOATING OVERLAYS ================= */}
-      <SafeAreaView pointerEvents="box-none" style={styles.topOverlayArea}>
-        {/* Google / Apple Maps Styled Floating Search Card */}
-        <View style={styles.searchCard}>
-          <View style={styles.searchRow}>
-            {/* Search Icon / Indicator */}
-            <View style={styles.searchIconBubble}>
-              <Text style={styles.searchIconText}>🔍</Text>
+      {/* ================= 2. RIGHT-SIDE FLOATING CONTROLS (LESS CLUTTER) ================= */}
+      <View
+        pointerEvents="box-none"
+        style={[
+          styles.floatingActionColumn,
+          { bottom: isNavigating ? 140 : destination ? 260 : 40 },
+        ]}
+      >
+        {/* SEPARATE MENU POPOVER (Holds Report Hazard + Map Layers / Traffic) */}
+        {isToolsMenuOpen && (
+          <View style={styles.toolsMenuCard}>
+            <View style={styles.toolsMenuHeader}>
+              <Text style={styles.toolsMenuTitle}>MAP TOOLS</Text>
+              <TouchableOpacity onPress={() => setIsToolsMenuOpen(false)}>
+                <Text style={styles.toolsMenuClose}>✕</Text>
+              </TouchableOpacity>
             </View>
 
-            {/* Main Search Input */}
-            <TextInput
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              onFocus={() => setIsSearchFocused(true)}
-              placeholder="Search destination, street or city..."
-              placeholderTextColor="#94a3b8"
-              style={styles.searchInput}
-              returnKeyType="search"
-              clearButtonMode="while-editing"
-            />
-
-            {/* Clear / Voice / Radius Badge */}
-            {searchQuery.length > 0 ? (
-              <TouchableOpacity
-                onPress={() => {
-                  setSearchQuery('');
-                  setIsSearchFocused(false);
-                }}
-                style={styles.clearButton}
-              >
-                <Text style={styles.clearButtonText}>✕</Text>
-              </TouchableOpacity>
-            ) : (
-              <View style={styles.radiusPill}>
-                <Text style={styles.radiusPillText}>750m</Text>
+            {/* Menu Item 1: Report Stuff */}
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={handleReportHazard}
+              style={styles.toolsMenuItem}
+            >
+              <View style={[styles.menuItemIconBubble, { backgroundColor: '#fef2f2' }]}>
+                <Text style={styles.menuItemIcon}>⚠️</Text>
               </View>
-            )}
-          </View>
-
-          {/* Quick Filter Category Chips (Google Maps / Apple Maps style) */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filterChipScroll}
-            style={styles.filterChipScrollView}
-          >
-            <TouchableOpacity
-              onPress={() => setSelectedFilter('all')}
-              style={[
-                styles.filterChip,
-                selectedFilter === 'all' && styles.filterChipActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.filterChipText,
-                  selectedFilter === 'all' && styles.filterChipTextActive,
-                ]}
-              >
-                🅿️ All Spots ({parkingSpots.length})
-              </Text>
+              <View style={styles.menuItemTextCol}>
+                <Text style={styles.menuItemLabel}>Report Hazard</Text>
+                <Text style={styles.menuItemSub}>Wardens, full zones & work</Text>
+              </View>
             </TouchableOpacity>
 
+            {/* Menu Item 2: Satellite Layer Toggle */}
             <TouchableOpacity
-              onPress={() => setSelectedFilter('free')}
-              style={[
-                styles.filterChip,
-                selectedFilter === 'free' && styles.filterChipActive,
-              ]}
+              activeOpacity={0.8}
+              onPress={handleToggleMapType}
+              style={styles.toolsMenuItem}
             >
-              <Text
+              <View style={[styles.menuItemIconBubble, { backgroundColor: '#f0fdf4' }]}>
+                <Text style={styles.menuItemIcon}>
+                  {mapType === 'satellite' ? '🗺️' : '🛰️'}
+                </Text>
+              </View>
+              <View style={styles.menuItemTextCol}>
+                <Text style={styles.menuItemLabel}>
+                  {mapType === 'satellite' ? 'Standard Map' : 'Satellite View'}
+                </Text>
+                <Text style={styles.menuItemSub}>
+                  {mapType === 'satellite' ? 'Active: Satellite' : 'Active: Standard'}
+                </Text>
+              </View>
+              <View
                 style={[
-                  styles.filterChipText,
-                  selectedFilter === 'free' && styles.filterChipTextActive,
+                  styles.statusBadge,
+                  mapType === 'satellite' ? styles.statusBadgeOn : styles.statusBadgeOff,
                 ]}
               >
-                🆓 100% Free & Blue
-              </Text>
+                <Text
+                  style={[
+                    styles.statusBadgeText,
+                    mapType === 'satellite'
+                      ? styles.statusBadgeTextOn
+                      : styles.statusBadgeTextOff,
+                  ]}
+                >
+                  {mapType === 'satellite' ? 'ON' : 'OFF'}
+                </Text>
+              </View>
             </TouchableOpacity>
 
+            {/* Menu Item 3: Live Traffic Toggle */}
             <TouchableOpacity
-              onPress={() => setSelectedFilter('cheap')}
-              style={[
-                styles.filterChip,
-                selectedFilter === 'cheap' && styles.filterChipActive,
-              ]}
+              activeOpacity={0.8}
+              onPress={handleToggleTraffic}
+              style={styles.toolsMenuItem}
             >
-              <Text
+              <View style={[styles.menuItemIconBubble, { backgroundColor: '#eff6ff' }]}>
+                <Text style={styles.menuItemIcon}>🚦</Text>
+              </View>
+              <View style={styles.menuItemTextCol}>
+                <Text style={styles.menuItemLabel}>Traffic Conditions</Text>
+                <Text style={styles.menuItemSub}>Live municipal road feed</Text>
+              </View>
+              <View
                 style={[
-                  styles.filterChipText,
-                  selectedFilter === 'cheap' && styles.filterChipTextActive,
+                  styles.statusBadge,
+                  showTraffic ? styles.statusBadgeOn : styles.statusBadgeOff,
                 ]}
               >
-                💶 Under €2.00/h
-              </Text>
+                <Text
+                  style={[
+                    styles.statusBadgeText,
+                    showTraffic ? styles.statusBadgeTextOn : styles.statusBadgeTextOff,
+                  ]}
+                >
+                  {showTraffic ? 'ON' : 'OFF'}
+                </Text>
+              </View>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => setSelectedFilter('hazard')}
-              style={[
-                styles.filterChip,
-                selectedFilter === 'hazard' && styles.filterChipHazardActive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.filterChipText,
-                  selectedFilter === 'hazard' && styles.filterChipTextActive,
-                ]}
-              >
-                ⚠️ Wardens & Hazards
-              </Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
-
-        {/* Dropdown Suggestions Card (Appears when Search is Focused) */}
-        {isSearchFocused && (
-          <View style={styles.suggestionsContainer}>
-            <Text style={styles.suggestionsHeader}>POPULAR DESTINATIONS</Text>
-            {popularDestinations.map((dest) => (
-              <TouchableOpacity
-                key={dest.id}
-                onPress={() => handleSelectDestination(dest)}
-                style={styles.suggestionItem}
-              >
-                <View style={styles.suggestionIcon}>
-                  <Text style={styles.suggestionPin}>📍</Text>
-                </View>
-                <View style={styles.suggestionContent}>
-                  <Text style={styles.suggestionTitle}>{dest.name}</Text>
-                  <Text style={styles.suggestionSubtitle}>{dest.subtitle}</Text>
-                </View>
-                <Text style={styles.suggestionDistance}>{dest.distance}</Text>
-              </TouchableOpacity>
-            ))}
           </View>
         )}
-      </SafeAreaView>
 
-      {/* ================= RIGHT SIDE MAP CONTROLS ================= */}
-      <View pointerEvents="box-none" style={styles.mapControlsContainer}>
-        {/* Layer Switcher (Standard / Satellite) */}
+        {/* Separate Menu Trigger Button (Replaces cluttered buttons) */}
         <TouchableOpacity
           activeOpacity={0.85}
-          onPress={toggleMapType}
-          style={styles.mapControlButton}
-          accessibilityLabel="Toggle Satellite Layer"
+          onPress={() => setIsToolsMenuOpen(!isToolsMenuOpen)}
+          style={[
+            styles.floatingCircleButton,
+            isToolsMenuOpen && styles.floatingCircleButtonActive,
+          ]}
+          accessibilityLabel="Open Map Tools Menu"
         >
-          <Text style={styles.mapControlIcon}>
-            {mapType === 'standard' ? '🛰️' : '🗺️'}
+          <Text style={styles.floatingCircleIcon}>
+            {isToolsMenuOpen ? '✕' : '🛠️'}
           </Text>
         </TouchableOpacity>
 
-        {/* Traffic Overlay Toggle */}
-        <TouchableOpacity
-          activeOpacity={0.85}
-          onPress={() => setShowTraffic(!showTraffic)}
-          style={[
-            styles.mapControlButton,
-            showTraffic && styles.mapControlButtonActive,
-          ]}
-          accessibilityLabel="Toggle Traffic Layer"
-        >
-          <Text style={styles.mapControlIcon}>🚦</Text>
-        </TouchableOpacity>
-
-        {/* Re-center GPS Location Button */}
+        {/* KEPT BUTTON: Center to Your Location Button */}
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={handleRecenter}
-          style={styles.mapControlButton}
-          accessibilityLabel="Re-center on User Location"
+          style={styles.floatingCircleButton}
+          accessibilityLabel="Center to Your Location"
         >
-          <Text style={styles.mapControlIcon}>🎯</Text>
+          <Text style={styles.floatingCircleIcon}>🎯</Text>
         </TouchableOpacity>
       </View>
 
-      {/* ================= BOTTOM RIGHT: REPORT HAZARD FAB ================= */}
-      <TouchableOpacity
-        activeOpacity={0.85}
-        onPress={handleReportHazard}
-        style={styles.hazardFab}
-        accessibilityLabel="Report Hazard"
-      >
-        <Text style={styles.hazardFabIcon}>⚠️</Text>
-        <Text style={styles.hazardFabText}>Report</Text>
-      </TouchableOpacity>
+      {/* ================= 3. ACTIVE IN-APP NAVIGATION HUD ================= */}
+      {isNavigating ? (
+        <SafeAreaView pointerEvents="box-none" style={styles.navOverlayWrapper}>
+          {/* Top Turn-By-Turn Navigation Banner */}
+          <View style={styles.tbtHeaderCard}>
+            <View style={styles.tbtLeftIconBubble}>
+              <Text style={styles.tbtManeuverIcon}>{currentManeuver.icon}</Text>
+            </View>
+            <View style={styles.tbtInstructionCol}>
+              <Text style={styles.tbtDistance}>{currentManeuver.distanceText}</Text>
+              <Text style={styles.tbtInstruction} numberOfLines={2}>
+                {currentManeuver.instruction}
+              </Text>
+              <Text style={styles.tbtStreet}>{currentManeuver.street}</Text>
+            </View>
+          </View>
 
-      {/* ================= BOTTOM SPOT DETAIL CARD (APPLE MAPS STYLE) ================= */}
-      {selectedSpot && (
-        <SafeAreaView pointerEvents="box-none" style={styles.bottomSheetWrapper}>
-          <View style={styles.bottomCard}>
-            <View style={styles.cardHandle} />
+          {/* Speedometer & Hazard Radar (Left Side) */}
+          <View style={styles.speedRadarContainer}>
+            <View style={styles.speedGaugeBox}>
+              <Text style={styles.speedValue}>{currentSpeed}</Text>
+              <Text style={styles.speedUnit}>KM/H</Text>
+            </View>
+            <View style={styles.speedLimitSign}>
+              <Text style={styles.speedLimitText}>50</Text>
+            </View>
+            <View style={styles.radarPill}>
+              <Text style={styles.radarIcon}>🛡️</Text>
+              <Text style={styles.radarText}>Flitser Radar Active</Text>
+            </View>
+          </View>
 
-            <View style={styles.cardHeader}>
-              <View style={styles.cardTitleArea}>
-                <View style={styles.cardBadgeRow}>
-                  <View
-                    style={[
-                      styles.typeBadge,
-                      { backgroundColor: selectedSpot.color + '20' },
-                    ]}
-                  >
-                    <Text style={[styles.typeBadgeText, { color: selectedSpot.color }]}>
-                      {selectedSpot.badge}
-                    </Text>
-                  </View>
-                  <Text style={styles.cardDistance}>{selectedSpot.distance}</Text>
-                  <Text style={styles.cardWalkingTime}>· {selectedSpot.walkingTime}</Text>
-                </View>
-                <Text style={styles.cardTitle}>{selectedSpot.title}</Text>
+          {/* Bottom In-App Trip HUD Bar */}
+          <View style={styles.navBottomHUD}>
+            <View style={styles.navStatsRow}>
+              <div>
+                <Text style={styles.navEtaText}>
+                  {navPhase === 'driving' ? '6 min' : '2 min'}
+                </Text>
+                <Text style={styles.navSubText}>
+                  {navPhase === 'driving'
+                    ? `To ${optimalSpot?.title || 'Free Parking'}`
+                    : `To ${destination?.name || 'Destination'}`}
+                </Text>
+              </div>
+
+              <View style={styles.phaseIndicatorBadge}>
+                <Text style={styles.phaseIndicatorText}>
+                  {navPhase === 'driving' ? '🚗 DRIVING TO SPOT' : '🚶 WALKING LEG'}
+                </Text>
               </View>
 
               <TouchableOpacity
-                onPress={() => setSelectedSpot(null)}
-                style={styles.closeCardButton}
+                onPress={() => setIsVoiceMuted(!isVoiceMuted)}
+                style={styles.voiceButton}
               >
-                <Text style={styles.closeCardText}>✕</Text>
+                <Text style={styles.voiceIcon}>{isVoiceMuted ? '🔇' : '🔊'}</Text>
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.cardDescription}>{selectedSpot.description}</Text>
-
-            {/* Venstertijden / Municipal Rules */}
-            <View style={styles.venstertijdenBox}>
-              <Text style={styles.venstertijdenIcon}>⏱️</Text>
-              <Text style={styles.venstertijdenText}>{selectedSpot.venstertijden}</Text>
-            </View>
-
-            {/* Action Buttons */}
-            <View style={styles.actionRow}>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                onPress={() => {
-                  Alert.alert(
-                    'Routing to Parking',
-                    `Routing to ${selectedSpot.title}.\nEstimated walking time to destination: ${selectedSpot.walkingTime}.`
-                  );
-                }}
-                style={styles.primaryActionButton}
-              >
-                <Text style={styles.primaryActionText}>
-                  {selectedSpot.pricePerHour === 0 ? 'Park for Free' : `Park (${selectedSpot.label})`}
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => {
-                  Alert.alert('Saved', 'Spot added to saved parking list.');
-                }}
-                style={styles.secondaryActionButton}
-              >
-                <Text style={styles.secondaryActionText}>⭐ Save</Text>
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={handleStopNavigation}
+              style={styles.endNavigationBtn}
+            >
+              <Text style={styles.endNavigationText}>✕ End Route</Text>
+            </TouchableOpacity>
           </View>
         </SafeAreaView>
-      )}
+      ) : (
+        /* ================= 4. OVERVIEW / DESTINATION SEARCH MODE ================= */
+        <>
+          {/* Top Floating Search Bar */}
+          <SafeAreaView pointerEvents="box-none" style={styles.topOverlayArea}>
+            <View style={styles.searchCard}>
+              <View style={styles.searchRow}>
+                <View style={styles.searchIconBubble}>
+                  <Text style={styles.searchIconText}>{destination ? '🏁' : '🔍'}</Text>
+                </View>
+                <TextInput
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  onFocus={() => setIsSearchFocused(true)}
+                  placeholder="Enter destination to scan free parking..."
+                  placeholderTextColor="#94a3b8"
+                  style={styles.searchInput}
+                  returnKeyType="search"
+                />
+                {destination && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      setDestination(null);
+                      setOptimalSpot(null);
+                      setSearchQuery('');
+                    }}
+                    style={styles.clearBtn}
+                  >
+                    <Text style={styles.clearBtnText}>✕</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
 
-      {/* Loading Overlay (Only if first GPS location is actively resolving) */}
-      {isLoading && !location && (
-        <View style={styles.initialLoadingBanner}>
-          <ActivityIndicator size="small" color="#3b82f6" />
-          <Text style={styles.initialLoadingText}>
-            Detecting GPS position & 750m parking zone...
-          </Text>
-        </View>
+            {/* Suggestions Card */}
+            {isSearchFocused && (
+              <View style={styles.suggestionsCard}>
+                <Text style={styles.suggestionsHeader}>SET DESTINATION</Text>
+                {destinationsCatalog.map((dest) => (
+                  <TouchableOpacity
+                    key={dest.name}
+                    onPress={() => {
+                      setSearchQuery(dest.name);
+                      setDestination(dest);
+                      setIsSearchFocused(false);
+                      Keyboard.dismiss();
+                    }}
+                    style={styles.suggestionRow}
+                  >
+                    <Text style={styles.suggestionPin}>📍</Text>
+                    <View style={styles.suggestionTextCol}>
+                      <Text style={styles.suggestionTitle}>{dest.name}</Text>
+                      <Text style={styles.suggestionSubtitle}>{dest.subtitle}</Text>
+                    </View>
+                    <View style={styles.autoScanPill}>
+                      <Text style={styles.autoScanText}>Auto-Scan</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </SafeAreaView>
+
+          {/* Bottom Route Summary Drawer */}
+          {destination && optimalSpot && (
+            <SafeAreaView pointerEvents="box-none" style={styles.bottomDrawerArea}>
+              <View style={styles.drawerCard}>
+                <View style={styles.cardHandle} />
+
+                {/* Match Banner */}
+                <View style={styles.freeMatchBanner}>
+                  <Text style={styles.freeMatchIcon}>✨</Text>
+                  <Text style={styles.freeMatchTitle}>
+                    {optimalSpot.pricePerHour === 0
+                      ? `Found 100% Free Parking ${optimalSpot.distanceToDestMeters}m from destination!`
+                      : `Cheapest Parking: ${optimalSpot.label} (${optimalSpot.distanceToDestMeters}m walk)`}
+                  </Text>
+                </View>
+
+                {/* 2-Leg Journey Breakdown */}
+                <View style={styles.journeyLegsRow}>
+                  <View style={styles.journeyLeg}>
+                    <Text style={styles.journeyLegIcon}>🚗</Text>
+                    <Text style={styles.journeyLegTime}>8 min</Text>
+                    <Text style={styles.journeyLegDesc}>Drive to Spot</Text>
+                  </View>
+                  <Text style={styles.arrowIcon}>➔</Text>
+                  <View style={styles.journeyLeg}>
+                    <Text style={styles.journeyLegIcon}>🅿️</Text>
+                    <Text style={[styles.journeyLegTime, { color: optimalSpot.color }]}>
+                      {optimalSpot.label}
+                    </Text>
+                    <Text style={styles.journeyLegDesc}>{optimalSpot.badge}</Text>
+                  </View>
+                  <Text style={styles.arrowIcon}>➔</Text>
+                  <View style={styles.journeyLeg}>
+                    <Text style={styles.journeyLegIcon}>🚶</Text>
+                    <Text style={styles.journeyLegTime}>{optimalSpot.walkingTimeMinutes} min</Text>
+                    <Text style={styles.journeyLegDesc}>Walk ({optimalSpot.distanceToDestMeters}m)</Text>
+                  </View>
+                </View>
+
+                {/* In-App Start Button */}
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={handleStartInAppNavigation}
+                  style={styles.startInAppNavBtn}
+                >
+                  <Text style={styles.startInAppNavText}>
+                    🧭 Start In-App Turn-By-Turn Navigation
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </SafeAreaView>
+          )}
+        </>
       )}
     </View>
   );
@@ -681,257 +961,388 @@ const styles = StyleSheet.create({
     backgroundColor: '#0f172a',
   },
 
-  // Top Search Overlays
-  topOverlayArea: {
+  // Floating Action Column on Right Side (Clutter-Free)
+  floatingActionColumn: {
     position: 'absolute',
-    top: Platform.OS === 'android' ? 36 : 10,
-    left: 0,
-    right: 0,
-    zIndex: 30,
+    right: 14,
+    zIndex: 35,
+    alignItems: 'flex-end',
+    gap: 12,
   },
-  searchCard: {
-    marginHorizontal: 14,
-    marginTop: 4,
-    backgroundColor: '#ffffff',
+  floatingCircleButton: {
+    width: 48,
+    height: 48,
     borderRadius: 24,
-    paddingTop: 10,
-    paddingBottom: 8,
-    paddingHorizontal: 12,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.16,
-    shadowRadius: 10,
+    shadowOpacity: 0.22,
+    shadowRadius: 6,
     elevation: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(226, 232, 240, 0.9)',
-  },
-  searchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  searchIconBubble: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#f1f5f9',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  searchIconText: {
-    fontSize: 16,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#1e293b',
-    paddingVertical: 6,
-  },
-  clearButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#e2e8f0',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 6,
-  },
-  clearButtonText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#64748b',
-  },
-  radiusPill: {
-    backgroundColor: '#eff6ff',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-    marginLeft: 6,
-  },
-  radiusPillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#1d4ed8',
-  },
-
-  // Category Filter Chips
-  filterChipScrollView: {
-    marginTop: 10,
-  },
-  filterChipScroll: {
-    paddingRight: 6,
-  },
-  filterChip: {
-    backgroundColor: '#f8fafc',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 18,
-    marginRight: 6,
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
-  filterChipActive: {
+  floatingCircleButtonActive: {
     backgroundColor: '#1e293b',
     borderColor: '#0f172a',
   },
-  filterChipHazardActive: {
-    backgroundColor: '#dc2626',
-    borderColor: '#b91c1c',
-  },
-  filterChipText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#475569',
-  },
-  filterChipTextActive: {
-    color: '#ffffff',
+  floatingCircleIcon: {
+    fontSize: 20,
   },
 
-  // Suggestions Dropdown
-  suggestionsContainer: {
-    marginHorizontal: 14,
-    marginTop: 6,
+  // Separate Tools Menu Popover
+  toolsMenuCard: {
+    width: 260,
     backgroundColor: '#ffffff',
     borderRadius: 20,
     padding: 12,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    elevation: 9,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 14,
+    elevation: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
+    marginBottom: 4,
   },
-  suggestionsHeader: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-    color: '#94a3b8',
-    marginBottom: 8,
-    marginLeft: 4,
-  },
-  suggestionItem: {
+  toolsMenuHeader: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
+    marginBottom: 6,
   },
-  suggestionIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#f8fafc',
+  toolsMenuTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#94a3b8',
+    letterSpacing: 0.6,
+  },
+  toolsMenuClose: {
+    fontSize: 13,
+    color: '#94a3b8',
+    fontWeight: '800',
+    paddingHorizontal: 4,
+  },
+  toolsMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f8fafc',
+  },
+  menuItemIconBubble: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
   },
-  suggestionPin: {
+  menuItemIcon: {
     fontSize: 16,
   },
-  suggestionContent: {
+  menuItemTextCol: {
     flex: 1,
   },
-  suggestionTitle: {
-    fontSize: 14,
-    fontWeight: '600',
+  menuItemLabel: {
+    fontSize: 13,
+    fontWeight: '700',
     color: '#0f172a',
   },
-  suggestionSubtitle: {
-    fontSize: 11,
+  menuItemSub: {
+    fontSize: 10,
     color: '#64748b',
     marginTop: 1,
   },
-  suggestionDistance: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#2563eb',
-    marginLeft: 8,
+  statusBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
   },
-
-  // Map Controls (Right Side)
-  mapControlsContainer: {
-    position: 'absolute',
-    right: 14,
-    bottom: 120,
-    zIndex: 20,
-    alignItems: 'center',
-  },
-  mapControlButton: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 6,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  mapControlButtonActive: {
+  statusBadgeOn: {
     backgroundColor: '#dbeafe',
-    borderColor: '#3b82f6',
   },
-  mapControlIcon: {
-    fontSize: 18,
+  statusBadgeOff: {
+    backgroundColor: '#f1f5f9',
+  },
+  statusBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  statusBadgeTextOn: {
+    color: '#1d4ed8',
+  },
+  statusBadgeTextOff: {
+    color: '#64748b',
   },
 
-  // Report Hazard FAB (Bottom Right)
-  hazardFab: {
+  // Turn-by-Turn Navigation Header
+  navOverlayWrapper: {
     position: 'absolute',
-    right: 14,
-    bottom: 34,
-    width: 62,
-    height: 62,
-    borderRadius: 31,
-    backgroundColor: '#dc2626',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    justifyContent: 'space-between',
+    zIndex: 40,
+  },
+  tbtHeaderCard: {
+    marginHorizontal: 12,
+    marginTop: Platform.OS === 'android' ? 36 : 10,
+    backgroundColor: '#0f172a',
+    borderRadius: 22,
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 10,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  tbtLeftIconBubble: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#2563eb',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#dc2626',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.45,
-    shadowRadius: 10,
-    elevation: 10,
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.4)',
-    zIndex: 20,
+    marginRight: 12,
   },
-  hazardFabIcon: {
-    fontSize: 22,
-    lineHeight: 24,
-  },
-  hazardFabText: {
-    fontSize: 9,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
+  tbtManeuverIcon: {
+    fontSize: 24,
     color: '#ffffff',
   },
+  tbtInstructionCol: {
+    flex: 1,
+  },
+  tbtDistance: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#38bdf8',
+  },
+  tbtInstruction: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#ffffff',
+    marginTop: 1,
+  },
+  tbtStreet: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94a3b8',
+    marginTop: 2,
+  },
 
-  // Custom Markers
-  markerContainer: {
-    paddingHorizontal: 8,
+  // Speedometer & Radar Gauge
+  speedRadarContainer: {
+    position: 'absolute',
+    left: 14,
+    bottom: 140,
+    zIndex: 30,
+    alignItems: 'flex-start',
+  },
+  speedGaugeBox: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#0f172a',
+    borderWidth: 3,
+    borderColor: '#38bdf8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 8,
+  },
+  speedValue: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#ffffff',
+    lineHeight: 22,
+  },
+  speedUnit: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: '#94a3b8',
+  },
+  speedLimitSign: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#ffffff',
+    borderWidth: 3,
+    borderColor: '#dc2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+    marginLeft: 12,
+  },
+  speedLimitText: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#000000',
+  },
+  radarPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.9)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  radarIcon: {
+    fontSize: 12,
+    marginRight: 4,
+  },
+  radarText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#10b981',
+  },
+
+  // Bottom In-App HUD Bar
+  navBottomHUD: {
+    backgroundColor: '#0f172a',
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    paddingHorizontal: 18,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 22 : 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 12,
+    borderTopWidth: 1,
+    borderColor: '#334155',
+  },
+  navStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  navEtaText: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#ffffff',
+  },
+  navSubText: {
+    fontSize: 11,
+    color: '#94a3b8',
+    fontWeight: '600',
+  },
+  phaseIndicatorBadge: {
+    backgroundColor: '#1e293b',
+    paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#3b82f6',
+  },
+  phaseIndicatorText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#38bdf8',
+  },
+  voiceButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#1e293b',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  voiceIcon: {
+    fontSize: 16,
+  },
+  endNavigationBtn: {
+    backgroundColor: '#dc2626',
+    borderRadius: 16,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  endNavigationText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+
+  // Vehicle Cursor Marker
+  activeVehicleMarker: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  vehiclePuckGlow: {
+    position: 'absolute',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(56, 189, 248, 0.3)',
+  },
+  vehiclePuck: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#ffffff',
     borderWidth: 2,
+    borderColor: '#0284c7',
+    alignItems: 'center',
+    justifyContent: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.3,
     shadowRadius: 4,
     elevation: 5,
   },
-  markerLabel: {
-    fontSize: 11,
+  vehiclePuckIcon: {
+    fontSize: 16,
+  },
+
+  // Destination & Parking Markers
+  destinationMarker: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#0f172a',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  destMarkerIcon: {
+    fontSize: 16,
+  },
+  parkingSpotMarker: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  parkingSpotText: {
+    color: '#ffffff',
+    fontSize: 10,
     fontWeight: '900',
-    letterSpacing: 0.3,
   },
   markerArrow: {
     width: 0,
@@ -944,123 +1355,199 @@ const styles = StyleSheet.create({
     borderRightColor: 'transparent',
   },
 
-  // Bottom Sheet Spot Details
-  bottomSheetWrapper: {
+  // Overview Search Bar
+  topOverlayArea: {
+    position: 'absolute',
+    top: Platform.OS === 'android' ? 36 : 10,
+    left: 0,
+    right: 0,
+    zIndex: 30,
+  },
+  searchCard: {
+    marginHorizontal: 14,
+    marginTop: 4,
+    backgroundColor: '#ffffff',
+    borderRadius: 22,
+    padding: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  searchIconBubble: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  searchIconText: {
+    fontSize: 15,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1e293b',
+  },
+  clearBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#e2e8f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clearBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+
+  // Suggestions Card
+  suggestionsCard: {
+    marginHorizontal: 14,
+    marginTop: 6,
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    padding: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  suggestionsHeader: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#94a3b8',
+    marginBottom: 6,
+    marginLeft: 4,
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  suggestionPin: {
+    fontSize: 16,
+    marginRight: 8,
+  },
+  suggestionTextCol: {
+    flex: 1,
+  },
+  suggestionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  suggestionSubtitle: {
+    fontSize: 10,
+    color: '#64748b',
+  },
+  autoScanPill: {
+    backgroundColor: '#ecfdf5',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  autoScanText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#059669',
+  },
+
+  // Bottom Route Drawer
+  bottomDrawerArea: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
     zIndex: 40,
   },
-  bottomCard: {
+  drawerCard: {
     backgroundColor: '#ffffff',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: Platform.OS === 'ios' ? 24 : 18,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: Platform.OS === 'ios' ? 20 : 14,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
     elevation: 12,
-    borderTopWidth: 1,
-    borderColor: '#e2e8f0',
   },
   cardHandle: {
-    width: 36,
+    width: 32,
     height: 4,
     borderRadius: 2,
     backgroundColor: '#cbd5e1',
     alignSelf: 'center',
-    marginBottom: 12,
+    marginBottom: 8,
   },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  cardTitleArea: {
-    flex: 1,
-    paddingRight: 10,
-  },
-  cardBadgeRow: {
+  freeMatchBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 4,
-  },
-  typeBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 8,
-    marginRight: 8,
-  },
-  typeBadgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  cardDistance: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
-  cardWalkingTime: {
-    fontSize: 12,
-    color: '#64748b',
-    marginLeft: 4,
-  },
-  cardTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
-  closeCardButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#f1f5f9',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  closeCardText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#64748b',
-  },
-  cardDescription: {
-    fontSize: 13,
-    color: '#475569',
-    marginTop: 6,
-    lineHeight: 18,
-  },
-  venstertijdenBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f8fafc',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginTop: 10,
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#bfdbfe',
+    marginBottom: 8,
   },
-  venstertijdenIcon: {
-    fontSize: 14,
+  freeMatchIcon: {
+    fontSize: 13,
     marginRight: 6,
   },
-  venstertijdenText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#334155',
+  freeMatchTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1e40af',
     flex: 1,
   },
-  actionRow: {
+  journeyLegsRow: {
     flexDirection: 'row',
-    marginTop: 14,
-    gap: 10,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 10,
   },
-  primaryActionButton: {
-    flex: 1,
+  journeyLeg: {
+    alignItems: 'center',
+  },
+  journeyLegIcon: {
+    fontSize: 14,
+  },
+  journeyLegTime: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginTop: 2,
+  },
+  journeyLegDesc: {
+    fontSize: 9,
+    color: '#64748b',
+    fontWeight: '600',
+  },
+  arrowIcon: {
+    fontSize: 11,
+    color: '#94a3b8',
+  },
+  startInAppNavBtn: {
     backgroundColor: '#2563eb',
     borderRadius: 16,
     paddingVertical: 14,
@@ -1072,46 +1559,9 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
-  primaryActionText: {
+  startInAppNavText: {
     color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  secondaryActionButton: {
-    backgroundColor: '#f1f5f9',
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  secondaryActionText: {
-    color: '#334155',
     fontSize: 14,
-    fontWeight: '700',
-  },
-
-  // Floating status toast
-  initialLoadingBanner: {
-    position: 'absolute',
-    top: Platform.OS === 'android' ? 120 : 130,
-    alignSelf: 'center',
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.92)',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    gap: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  initialLoadingText: {
-    color: '#f8fafc',
-    fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '800',
   },
 });
