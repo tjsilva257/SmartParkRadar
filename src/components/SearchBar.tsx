@@ -292,3 +292,4 @@ const styles = StyleSheet.create({
     color: '#059669',
   },
 });
+

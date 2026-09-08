@@ -32,3 +32,4 @@ export function generateRouteWaypoints(start: Coordinate, end: Coordinate, steps
   points.push(end);
   return points;
 }
+

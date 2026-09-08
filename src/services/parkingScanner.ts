@@ -126,3 +126,4 @@ export function scanNearbyParkingSpots(center: Coordinate): {
 
   return { spots, optimalSpot };
 }
+

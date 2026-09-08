@@ -35,3 +35,4 @@ export interface TurnManeuver {
 }
 
 export type NavPhase = 'driving' | 'walking';
+
