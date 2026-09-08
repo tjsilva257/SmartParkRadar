@@ -1,8 +1,13 @@
 {
   "dependencies": {
-    "nativewind": "^4.2.6"
+    "expo": "^57.0.20",
+    "expo-location": "~57.0.16",
+    "nativewind": "^4.2.6",
+    "react-native-maps": "1.27.2"
   },
   "devDependencies": {
-    "tailwindcss": "^3.4.19"
+    "@types/react": "~19.2.4",
+    "tailwindcss": "^3.4.19",
+    "typescript": "~6.0.3"
   }
 }
