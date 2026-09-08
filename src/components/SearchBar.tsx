@@ -159,7 +159,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    top: Platform.OS === 'android' ? 36 : 10,
+    top: Platform.OS === 'android' ? 44 : 58,
     left: 0,
     right: 0,
     zIndex: 40,

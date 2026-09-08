@@ -114,7 +114,7 @@ const styles = StyleSheet.create({
   },
   tbtHeaderCard: {
     marginHorizontal: 12,
-    marginTop: Platform.OS === 'android' ? 36 : 10,
+    marginTop: Platform.OS === 'android' ? 44 : 58,
     backgroundColor: '#0f172a',
     borderRadius: 22,
     padding: 14,
