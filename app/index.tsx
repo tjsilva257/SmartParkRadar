@@ -11,7 +11,7 @@ import {
 import MapView, { Marker, Circle, Polyline, Region, MapType } from 'react-native-maps';
 import * as Location from 'expo-location';
 
-import { Coordinate, DestinationTarget, ParkingSpot, TurnManeuver, NavPhase, DriveRouteOption, CameraWarning, SpeedAlert, SpeedCamera } from '../src/types/parking';
+import { Coordinate, DestinationTarget, ParkingSpot, TurnManeuver, NavPhase, DriveRouteOption, CameraWarning, SpeedAlert, SpeedCamera, CameraDisplayMode } from '../src/types/parking';
 import { scanNearbyParkingSpots } from '../src/services/parkingScanner';
 import { fetchMultiDriveRoutes, fetchWalkingRoute } from '../src/services/routingService';
 import { SPEED_CAMERAS, getUpcomingCameraWarning, calculateSpeedFine } from '../src/services/cameraRadarService';
@@ -19,6 +19,14 @@ import { SearchBar } from '../src/components/SearchBar';
 import { MapToolsMenu } from '../src/components/MapToolsMenu';
 import { RouteDrawer } from '../src/components/RouteDrawer';
 import { NavigationHUD } from '../src/components/NavigationHUD';
+import { voiceGuidance } from '../src/services/voiceGuidanceService';
+import { ScratchMapOverlay } from '../src/components/ScratchMapOverlay';
+import {
+  loadExploredGeometry,
+  addExploredCoordinate,
+  ExploredGeometry,
+} from '../src/services/scratchMapService';
+import { startScratchMapTracking } from '../src/services/scratchMapTracker';
 
 const DEFAULT_COORDS: Coordinate = {
   latitude: 52.3676,
@@ -80,6 +88,29 @@ export default function MapScreen() {
   // Map Controls State
   const [mapType, setMapType] = useState<MapType>('standard');
   const [showTraffic, setShowTraffic] = useState(true);
+  const [showScratchMap, setShowScratchMap] = useState(false);
+  const [cameraDisplayMode, setCameraDisplayMode] = useState<CameraDisplayMode>('always');
+  const [exploredGeometry, setExploredGeometry] = useState<ExploredGeometry>(null);
+
+  const handleCycleCameraDisplayMode = () => {
+    setCameraDisplayMode((prev) => {
+      if (prev === 'always') return 'trip_only';
+      if (prev === 'trip_only') return 'off';
+      return 'always';
+    });
+  };
+
+  const shouldShowCameraIcons =
+    cameraDisplayMode === 'always' ||
+    (cameraDisplayMode === 'trip_only' && (isNavigating || Boolean(destination)));
+
+  // Load persisted Scratch Map geometry & start background tracker
+  useEffect(() => {
+    loadExploredGeometry().then((geo) => {
+      if (geo) setExploredGeometry(geo);
+    });
+    startScratchMapTracking();
+  }, []);
 
   const userCoord: Coordinate = useMemo(() => {
     if (location) {
@@ -123,6 +154,10 @@ export default function MapScreen() {
             };
             setRegion(initialRegion);
             mapRef.current?.animateToRegion(initialRegion, 800);
+
+            addExploredCoordinate(currentLoc.coords.latitude, currentLoc.coords.longitude).then((geo) => {
+              if (isMounted && geo) setExploredGeometry(geo);
+            });
           }
 
           locSubscription = await Location.watchPositionAsync(
@@ -137,6 +172,9 @@ export default function MapScreen() {
                 if (updatedLoc.coords.speed && updatedLoc.coords.speed > 0) {
                   setCurrentSpeed(Math.round(updatedLoc.coords.speed * 3.6));
                 }
+                addExploredCoordinate(updatedLoc.coords.latitude, updatedLoc.coords.longitude).then((geo) => {
+                  if (isMounted && geo) setExploredGeometry(geo);
+                });
               }
             }
           );
@@ -297,6 +335,40 @@ export default function MapScreen() {
     }
   }, [vehiclePosition.latitude, vehiclePosition.longitude, isNavigating, currentManeuver.street, currentManeuver.instruction]);
 
+  // --- Voice Guidance (TTS) Notifications ---
+
+  // 1. Announce Turn-by-Turn Maneuver when step changes
+  useEffect(() => {
+    if (isNavigating && currentManeuver) {
+      voiceGuidance.speakTurnManeuver(currentManeuver, isVoiceMuted);
+    }
+  }, [isNavigating, currentManeuver, isVoiceMuted]);
+
+  // 2. Announce Speed Camera Alert & Urgent Slow Down Prompt
+  useEffect(() => {
+    if (isNavigating && cameraWarning) {
+      voiceGuidance.speakCameraWarning(cameraWarning, currentSpeed, isVoiceMuted);
+    }
+  }, [isNavigating, cameraWarning, currentSpeed, isVoiceMuted]);
+
+  // 3. Announce Speed Limit Changes
+  useEffect(() => {
+    if (isNavigating && speedLimit) {
+      voiceGuidance.speakSpeedLimitChange(speedLimit, isVoiceMuted);
+    }
+  }, [isNavigating, speedLimit, isVoiceMuted]);
+
+  // Handle Mute Toggle with instantaneous audio cutoff
+  const handleToggleVoice = () => {
+    setIsVoiceMuted((prev) => {
+      const next = !prev;
+      if (next) {
+        voiceGuidance.stop();
+      }
+      return next;
+    });
+  };
+
   // Interactive Speed Cycle Tester (Tap speedometer to test fine risk!)
   const handleCycleSpeedTest = () => {
     setCurrentSpeed((prev) => {
@@ -345,6 +417,11 @@ export default function MapScreen() {
     const secondPoint = drivingPolyline[1] || optimalSpot.coordinate;
     const initialBearing = calculateBearing(initialPoint, secondPoint);
 
+    // Scratch off initial point
+    addExploredCoordinate(initialPoint.latitude, initialPoint.longitude).then((geo) => {
+      if (geo) setExploredGeometry(geo);
+    });
+
     // Initial 3D driver cockpit view
     mapRef.current?.animateCamera(
       {
@@ -376,6 +453,11 @@ export default function MapScreen() {
 
         setVehiclePosition(nextPoint);
 
+        // Scratch off fog of war along simulated path
+        addExploredCoordinate(nextPoint.latitude, nextPoint.longitude).then((geo) => {
+          if (geo) setExploredGeometry(geo);
+        });
+
         // Check for upcoming camera near nextPoint
         const camAlert = getUpcomingCameraWarning(nextPoint, 1500);
         setCameraWarning(camAlert);
@@ -404,6 +486,18 @@ export default function MapScreen() {
         clearInterval(interval);
         setNavPhase('walking');
         setVehiclePosition(optimalSpot.coordinate);
+        addExploredCoordinate(optimalSpot.coordinate.latitude, optimalSpot.coordinate.longitude).then((geo) => {
+          if (geo) setExploredGeometry(geo);
+        });
+        voiceGuidance.speakTurnManeuver(
+          {
+            instruction: 'You have arrived at your parking destination.',
+            street: optimalSpot.title,
+            distanceText: '',
+            icon: '🏁',
+          },
+          isVoiceMuted
+        );
         mapRef.current?.animateCamera(
           {
             center: optimalSpot.coordinate,
@@ -426,6 +520,7 @@ export default function MapScreen() {
 
   const handleStopNavigation = () => {
     if (simIntervalId) clearInterval(simIntervalId);
+    voiceGuidance.reset();
     setIsNavigating(false);
     setNavPhase('driving');
     setSimStep(0);
@@ -438,6 +533,7 @@ export default function MapScreen() {
   };
 
   const handleClearDestination = () => {
+    voiceGuidance.reset();
     hasFittedRouteForDest.current = null;
     setDestination(null);
     setOptimalSpot(null);
@@ -482,6 +578,11 @@ export default function MapScreen() {
           }
         }}
       >
+        {/* 0. THE SCRATCH MAP (FOG OF WAR) OVERLAY */}
+        {showScratchMap && (
+          <ScratchMapOverlay exploredGeometry={exploredGeometry} />
+        )}
+
         {/* 750m Scan Circle around Destination */}
         {!isNavigating && (
           <Circle
@@ -569,47 +670,48 @@ export default function MapScreen() {
         )}
 
         {/* Real Speed Cameras & Flitsmeister Radar Traps */}
-        {SPEED_CAMERAS.map((cam) => {
-          const isTraject = cam.type === 'traject';
-          const isMobile = cam.type === 'mobile';
-          const isRedLight = cam.type === 'red_light';
-          return (
-            <Marker
-              key={cam.id}
-              coordinate={cam.coordinate}
-              title={cam.name}
-              description={`${cam.road} • Max ${cam.speedLimit} km/h`}
-              zIndex={28}
-              onPress={() => {
-                Alert.alert(
-                  `📸 ${cam.name}`,
-                  `${cam.road}\n\nType: ${
-                    isTraject
-                      ? 'Trajectcontrole'
-                      : isMobile
-                      ? 'Mobiele Controle'
-                      : isRedLight
-                      ? 'Roodlicht & Flitser'
-                      : 'Vaste Flitspaal'
-                  }\nSnelheidslimiet: ${cam.speedLimit} km/h\n\n${cam.description}`
-                );
-              }}
-            >
-              <View style={[styles.cameraMarkerBubble, isMobile && styles.cameraMarkerMobile]}>
-                <Text style={styles.cameraMarkerEmoji}>
-                  {isTraject ? '⏱️' : isMobile ? '🚓' : isRedLight ? '🚦' : '📸'}
-                </Text>
-                <View style={styles.cameraMarkerSign}>
-                  <Text style={styles.cameraMarkerSignText}>{cam.speedLimit}</Text>
+        {shouldShowCameraIcons &&
+          SPEED_CAMERAS.map((cam) => {
+            const isTraject = cam.type === 'traject';
+            const isMobile = cam.type === 'mobile';
+            const isRedLight = cam.type === 'red_light';
+            return (
+              <Marker
+                key={cam.id}
+                coordinate={cam.coordinate}
+                title={cam.name}
+                description={`${cam.road} • Max ${cam.speedLimit} km/h`}
+                zIndex={28}
+                onPress={() => {
+                  Alert.alert(
+                    `📸 ${cam.name}`,
+                    `${cam.road}\n\nType: ${
+                      isTraject
+                        ? 'Trajectcontrole'
+                        : isMobile
+                        ? 'Mobiele Controle'
+                        : isRedLight
+                        ? 'Roodlicht & Flitser'
+                        : 'Vaste Flitspaal'
+                    }\nSnelheidslimiet: ${cam.speedLimit} km/h\n\n${cam.description}`
+                  );
+                }}
+              >
+                <View style={[styles.cameraMarkerBubble, isMobile && styles.cameraMarkerMobile]}>
+                  <Text style={styles.cameraMarkerEmoji}>
+                    {isTraject ? '⏱️' : isMobile ? '🚓' : isRedLight ? '🚦' : '📸'}
+                  </Text>
+                  <View style={styles.cameraMarkerSign}>
+                    <Text style={styles.cameraMarkerSignText}>{cam.speedLimit}</Text>
+                  </View>
                 </View>
-              </View>
-            </Marker>
-          );
-        })}
+              </Marker>
+            );
+          })}
       </MapView>
 
-      {/* 2. TOP SEARCH BAR (Real geocoding search & suggestions) */}
-      {!isNavigating && (
+      {/* 2. BOTTOM SEARCH BAR & DRAWER (Slide up for recents & favorites) */}
+      {!isNavigating && !destination && (
         <SearchBar
           currentDestination={destination}
           userLocation={userCoord}
@@ -634,10 +736,14 @@ export default function MapScreen() {
       <MapToolsMenu
         mapType={mapType}
         showTraffic={showTraffic}
+        showScratchMap={showScratchMap}
+        cameraDisplayMode={cameraDisplayMode}
         onToggleMapType={() => setMapType((p) => (p === 'standard' ? 'satellite' : 'standard'))}
         onToggleTraffic={() => setShowTraffic((p) => !p)}
+        onToggleScratchMap={() => setShowScratchMap((p) => !p)}
+        onCycleCameraDisplayMode={handleCycleCameraDisplayMode}
         onRecenter={handleRecenter}
-        bottomOffset={isNavigating ? 140 : destination ? 260 : 40}
+        bottomOffset={isNavigating ? 140 : destination ? 260 : 100}
       />
 
       {/* 4. OVERVIEW ROUTE DRAWER (When Destination is Set) */}
@@ -666,7 +772,7 @@ export default function MapScreen() {
           optimalSpot={optimalSpot}
           destination={destination}
           isVoiceMuted={isVoiceMuted}
-          onToggleVoice={() => setIsVoiceMuted(!isVoiceMuted)}
+          onToggleVoice={handleToggleVoice}
           onEndNavigation={handleStopNavigation}
           onCycleSpeedTest={handleCycleSpeedTest}
         />
@@ -789,7 +895,7 @@ const styles = StyleSheet.create({
   },
   floatingRadarPill: {
     position: 'absolute',
-    top: Platform.OS === 'android' ? 116 : 130,
+    top: Platform.OS === 'android' ? 52 : 62,
     alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',

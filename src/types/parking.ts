@@ -25,6 +25,18 @@ export interface DestinationTarget {
   name: string;
   subtitle: string;
   coordinate: Coordinate;
+  city?: string;
+  state?: string;
+  country?: string;
+  distanceKm?: string;
+}
+
+export type SavedLocationCategory = 'home' | 'work' | 'favorite' | 'recent';
+
+export interface SavedLocation extends DestinationTarget {
+  category: SavedLocationCategory;
+  customLabel?: string;
+  savedAt?: number;
 }
 
 export interface TurnManeuver {
@@ -83,4 +95,6 @@ export interface CameraWarning {
   distanceMeters: number;
   isUrgent: boolean;
 }
+
+export type CameraDisplayMode = 'always' | 'trip_only' | 'off';
 

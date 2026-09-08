@@ -1,12 +1,17 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { MapType } from 'react-native-maps';
+import { CameraDisplayMode } from '../types/parking';
 
 interface MapToolsMenuProps {
   mapType: MapType;
   showTraffic: boolean;
+  showScratchMap?: boolean;
+  cameraDisplayMode?: CameraDisplayMode;
   onToggleMapType: () => void;
   onToggleTraffic: () => void;
+  onToggleScratchMap?: () => void;
+  onCycleCameraDisplayMode?: () => void;
   onRecenter: () => void;
   bottomOffset?: number;
 }
@@ -14,8 +19,12 @@ interface MapToolsMenuProps {
 export const MapToolsMenu: React.FC<MapToolsMenuProps> = ({
   mapType,
   showTraffic,
+  showScratchMap = false,
+  cameraDisplayMode = 'always',
   onToggleMapType,
   onToggleTraffic,
+  onToggleScratchMap,
+  onCycleCameraDisplayMode,
   onRecenter,
   bottomOffset = 40,
 }) => {
@@ -133,6 +142,83 @@ export const MapToolsMenu: React.FC<MapToolsMenuProps> = ({
               </Text>
             </View>
           </TouchableOpacity>
+
+          {/* Action 4: Scratch Map (Fog of War) Toggle */}
+          {onToggleScratchMap && (
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={onToggleScratchMap}
+              style={styles.menuItem}
+            >
+              <View style={[styles.iconBubble, { backgroundColor: '#f3e8ff' }]}>
+                <Text style={styles.itemIcon}>🌫️</Text>
+              </View>
+              <View style={styles.textCol}>
+                <Text style={styles.itemTitle}>Scratch Map</Text>
+                <Text style={styles.itemSub}>Fog of War exploration</Text>
+              </View>
+              <View style={[styles.badge, showScratchMap ? styles.badgeOn : styles.badgeOff]}>
+                <Text
+                  style={[
+                    styles.badgeText,
+                    showScratchMap ? styles.badgeTextOn : styles.badgeTextOff,
+                  ]}
+                >
+                  {showScratchMap ? 'ON' : 'OFF'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {/* Action 5: Speed Camera Icons on Road Mode */}
+          {onCycleCameraDisplayMode && (
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={onCycleCameraDisplayMode}
+              style={styles.menuItem}
+            >
+              <View style={[styles.iconBubble, { backgroundColor: '#fee2e2' }]}>
+                <Text style={styles.itemIcon}>📸</Text>
+              </View>
+              <View style={styles.textCol}>
+                <Text style={styles.itemTitle}>Camera Icons</Text>
+                <Text style={styles.itemSub}>
+                  {cameraDisplayMode === 'always'
+                    ? 'Always visible on road'
+                    : cameraDisplayMode === 'trip_only'
+                    ? 'Only while on a trip'
+                    : 'Turned off completely'}
+                </Text>
+              </View>
+              <View
+                style={[
+                  styles.badge,
+                  cameraDisplayMode === 'always'
+                    ? styles.badgeOn
+                    : cameraDisplayMode === 'trip_only'
+                    ? styles.badgeTrip
+                    : styles.badgeOff,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.badgeText,
+                    cameraDisplayMode === 'always'
+                      ? styles.badgeTextOn
+                      : cameraDisplayMode === 'trip_only'
+                      ? styles.badgeTextTrip
+                      : styles.badgeTextOff,
+                  ]}
+                >
+                  {cameraDisplayMode === 'always'
+                    ? 'ALWAYS'
+                    : cameraDisplayMode === 'trip_only'
+                    ? 'ON TRIP'
+                    : 'OFF'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -266,12 +352,18 @@ const styles = StyleSheet.create({
   badgeOff: {
     backgroundColor: '#f1f5f9',
   },
+  badgeTrip: {
+    backgroundColor: '#fef3c7',
+  },
   badgeText: {
     fontSize: 9,
     fontWeight: '800',
   },
   badgeTextOn: {
     color: '#1d4ed8',
+  },
+  badgeTextTrip: {
+    color: '#b45309',
   },
   badgeTextOff: {
     color: '#64748b',
