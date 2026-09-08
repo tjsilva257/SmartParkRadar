@@ -32,6 +32,26 @@ const POPULAR_DESTINATIONS: DestinationTarget[] = [
     subtitle: 'Holiday Valet Parking, Schiphol',
     coordinate: { latitude: 52.3105, longitude: 4.7683 },
   },
+  {
+    name: 'Rotterdam Centraal',
+    subtitle: 'Stationsplein 1, 3013 AJ Rotterdam · City Terminal',
+    coordinate: { latitude: 51.9244, longitude: 4.4777 },
+  },
+  {
+    name: 'Rotterdam Centrum / Markthal',
+    subtitle: 'Ds. Jan Scharpstraat 298, Rotterdam · Commercial Core',
+    coordinate: { latitude: 51.9201, longitude: 4.4868 },
+  },
+  {
+    name: 'Utrecht Centraal',
+    subtitle: 'Stationshal 12, 3511 CE Utrecht · Central Hub',
+    coordinate: { latitude: 52.0894, longitude: 5.1102 },
+  },
+  {
+    name: 'Den Haag Centraal',
+    subtitle: 'Koningin Julianaplein 10, Den Haag · Government District',
+    coordinate: { latitude: 52.0809, longitude: 4.3248 },
+  },
 ];
 
 /**

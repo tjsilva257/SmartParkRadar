@@ -11,8 +11,8 @@ import MapView, { Marker, Circle, Polyline, Region, MapType } from 'react-native
 import * as Location from 'expo-location';
 
 import { Coordinate, DestinationTarget, ParkingSpot, TurnManeuver, NavPhase } from '../src/types/parking';
-import { getDistanceInMeters, generateRouteWaypoints } from '../src/utils/distance';
 import { scanNearbyParkingSpots } from '../src/services/parkingScanner';
+import { fetchRoadRoute } from '../src/services/routingService';
 import { SearchBar } from '../src/components/SearchBar';
 import { MapToolsMenu } from '../src/components/MapToolsMenu';
 import { RouteDrawer } from '../src/components/RouteDrawer';
@@ -36,6 +36,12 @@ export default function MapScreen() {
   const [destination, setDestination] = useState<DestinationTarget | null>(null);
   const [optimalSpot, setOptimalSpot] = useState<ParkingSpot | null>(null);
   const [selectedSpot, setSelectedSpot] = useState<ParkingSpot | null>(null);
+
+  // Real Road-Following Route State (via OSRM)
+  const [drivingPolyline, setDrivingPolyline] = useState<Coordinate[]>([]);
+  const [walkingPolyline, setWalkingPolyline] = useState<Coordinate[]>([]);
+  const [drivingStats, setDrivingStats] = useState({ km: '0 km', min: 0 });
+  const [roadManeuvers, setRoadManeuvers] = useState<TurnManeuver[]>([]);
 
   // In-App Navigation State
   const [isNavigating, setIsNavigating] = useState(false);
@@ -123,7 +129,7 @@ export default function MapScreen() {
   // 750m Scan Center: Focuses on destination if selected, or user location
   const scanCenter: Coordinate = destination ? destination.coordinate : userCoord;
 
-  // Run the 750m spatial parking scanner & priority algorithm
+  // Run the 750m spatial parking scanner & priority algorithm around the destination
   const { spots: nearbySpots, optimalSpot: scannedOptimal } = useMemo(() => {
     return scanNearbyParkingSpots(scanCenter);
   }, [scanCenter]);
@@ -133,45 +139,63 @@ export default function MapScreen() {
     if (destination && scannedOptimal && !isNavigating) {
       setOptimalSpot(scannedOptimal);
       setSelectedSpot(scannedOptimal);
-
-      setTimeout(() => {
-        mapRef.current?.fitToCoordinates(
-          [userCoord, scannedOptimal.coordinate, destination.coordinate],
-          {
-            edgePadding: { top: 140, right: 60, bottom: 320, left: 60 },
-            animated: true,
-          }
-        );
-      }, 350);
     }
-  }, [destination, scannedOptimal, isNavigating, userCoord]);
+  }, [destination, scannedOptimal, isNavigating]);
 
-  // Calculate Route Polylines
-  const drivingPolyline = useMemo(() => {
-    if (!destination || !optimalSpot) return [];
-    return generateRouteWaypoints(userCoord, optimalSpot.coordinate, 10);
-  }, [userCoord, destination, optimalSpot]);
+  // Fetch REAL ROAD-FOLLOWING ROUTES (via OSRM) for driving and walking legs
+  useEffect(() => {
+    let isMounted = true;
 
-  const walkingPolyline = useMemo(() => {
-    if (!destination || !optimalSpot) return [];
-    return generateRouteWaypoints(optimalSpot.coordinate, destination.coordinate, 5);
-  }, [destination, optimalSpot]);
+    async function loadRoadRoute() {
+      if (!destination || !optimalSpot) {
+        setDrivingPolyline([]);
+        setWalkingPolyline([]);
+        setRoadManeuvers([]);
+        return;
+      }
 
-  // Driving leg estimates
-  const drivingStats = useMemo(() => {
-    if (!optimalSpot) return { km: '0 km', min: 0 };
-    const meters = getDistanceInMeters(
-      userCoord.latitude,
-      userCoord.longitude,
-      optimalSpot.coordinate.latitude,
-      optimalSpot.coordinate.longitude
-    );
-    const km = (meters / 1000).toFixed(1);
-    const min = Math.max(2, Math.round(meters / 450));
-    return { km: `${km} km`, min };
-  }, [userCoord, optimalSpot]);
+      try {
+        const [driveResult, walkResult] = await Promise.all([
+          fetchRoadRoute(userCoord, optimalSpot.coordinate, 'driving'),
+          fetchRoadRoute(optimalSpot.coordinate, destination.coordinate, 'walking'),
+        ]);
 
-  // Turn-by-Turn Maneuvers along the in-app route
+        if (isMounted) {
+          setDrivingPolyline(driveResult.coordinates);
+          setWalkingPolyline(walkResult.coordinates);
+          setDrivingStats({
+            km: driveResult.distanceFormatted,
+            min: driveResult.durationMinutes,
+          });
+          setRoadManeuvers(driveResult.maneuvers);
+
+          // Fit camera smoothly over the full real road route
+          if (driveResult.coordinates.length > 0 && !isNavigating) {
+            const sampleStep = Math.max(1, Math.floor(driveResult.coordinates.length / 10));
+            const keyWaypoints = driveResult.coordinates.filter((_, idx) => idx % sampleStep === 0);
+            keyWaypoints.push(destination.coordinate);
+
+            setTimeout(() => {
+              mapRef.current?.fitToCoordinates(keyWaypoints, {
+                edgePadding: { top: 160, right: 70, bottom: 330, left: 70 },
+                animated: true,
+              });
+            }, 300);
+          }
+        }
+      } catch (err) {
+        // Handled inside fetchRoadRoute fallback
+      }
+    }
+
+    loadRoadRoute();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [destination, optimalSpot, userCoord, isNavigating]);
+
+  // Turn-by-Turn Maneuvers along the real in-app road route
   const currentManeuver: TurnManeuver = useMemo(() => {
     if (navPhase === 'walking') {
       return {
@@ -182,36 +206,18 @@ export default function MapScreen() {
       };
     }
 
-    if (simStep === 0) {
-      return {
-        instruction: 'Head north on current street towards canal',
-        street: 'Prins Hendrikkade',
-        distanceText: '250m',
-        icon: '⬆️',
-      };
-    } else if (simStep === 1) {
-      return {
-        instruction: 'Turn right at the intersection onto Singel',
-        street: 'Singel Canal',
-        distanceText: '120m',
-        icon: '↱',
-      };
-    } else if (simStep === 2) {
-      return {
-        instruction: 'Continue straight towards Free Parking Zone',
-        street: 'Singel Free Parking Strip',
-        distanceText: '80m',
-        icon: '⬆️',
-      };
-    } else {
-      return {
-        instruction: `Arrive at ${optimalSpot?.title || 'Free Parking Space'} on the right!`,
-        street: 'Destination Parking Space',
-        distanceText: 'Arrived',
-        icon: '🅿️',
-      };
+    if (roadManeuvers.length > 0) {
+      const index = Math.min(simStep, roadManeuvers.length - 1);
+      return roadManeuvers[index];
     }
-  }, [navPhase, simStep, optimalSpot, destination]);
+
+    return {
+      instruction: `Follow highway to ${optimalSpot?.title || 'Parking Space'}`,
+      street: 'Highway / Main route',
+      distanceText: drivingStats.km,
+      icon: '🚗',
+    };
+  }, [navPhase, simStep, roadManeuvers, optimalSpot, destination, drivingStats]);
 
   // Center to user/vehicle location
   const handleRecenter = () => {
@@ -236,9 +242,9 @@ export default function MapScreen() {
     }
   };
 
-  // Start In-App Turn-By-Turn Navigation
+  // Start In-App Turn-By-Turn Navigation (Advancing along real highway & road coordinates)
   const handleStartInAppNavigation = () => {
-    if (!destination || !optimalSpot) return;
+    if (!destination || !optimalSpot || drivingPolyline.length === 0) return;
     setIsNavigating(true);
     setNavPhase('driving');
     setSimStep(0);
@@ -255,21 +261,26 @@ export default function MapScreen() {
     );
 
     if (simIntervalId) clearInterval(simIntervalId);
-    let step = 0;
+
+    // Calculate jump step based on route length so simulation progresses smoothly
+    const totalPoints = drivingPolyline.length;
+    const stride = Math.max(1, Math.floor(totalPoints / 25));
+    let currentIdx = 0;
+
     const interval = setInterval(() => {
-      step++;
-      if (step < drivingPolyline.length) {
-        setSimStep(step);
-        const nextPoint = drivingPolyline[step];
+      currentIdx += stride;
+      if (currentIdx < totalPoints) {
+        setSimStep((prev) => prev + 1);
+        const nextPoint = drivingPolyline[currentIdx];
         setVehiclePosition(nextPoint);
         mapRef.current?.animateCamera(
           {
             center: nextPoint,
             pitch: 55,
-            heading: (step * 20) % 360,
-            zoom: 18.2,
+            heading: 25,
+            zoom: 17.5,
           },
-          { duration: 1400 }
+          { duration: 1200 }
         );
       } else {
         clearInterval(interval);
@@ -280,7 +291,7 @@ export default function MapScreen() {
           `You have reached ${optimalSpot.title}.\nNow walking ${optimalSpot.distanceToDestMeters}m to ${destination.name}.`
         );
       }
-    }, 2500);
+    }, 2000);
 
     setSimIntervalId(interval);
   };
@@ -302,6 +313,8 @@ export default function MapScreen() {
     setDestination(null);
     setOptimalSpot(null);
     setSelectedSpot(null);
+    setDrivingPolyline([]);
+    setWalkingPolyline([]);
     setIsNavigating(false);
     if (simIntervalId) clearInterval(simIntervalId);
 
@@ -320,7 +333,7 @@ export default function MapScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
 
-      {/* 1. MAP VIEW (Always using StyleSheet.absoluteFill) */}
+      {/* 1. MAP VIEW (Using StyleSheet.absoluteFill) */}
       <MapView
         ref={mapRef}
         style={StyleSheet.absoluteFill}
@@ -343,7 +356,7 @@ export default function MapScreen() {
           }
         }}
       >
-        {/* 750m Scan Circle */}
+        {/* 750m Scan Circle around Destination */}
         {!isNavigating && (
           <Circle
             center={scanCenter}
@@ -354,14 +367,16 @@ export default function MapScreen() {
           />
         )}
 
-        {/* Polylines */}
+        {/* Real Road-Following Polylines */}
         {destination && optimalSpot && (
           <>
+            {/* Driving Route: Real Highways & Streets to Parking */}
             <Polyline
               coordinates={drivingPolyline}
               strokeColor="#2563eb"
               strokeWidth={isNavigating ? 7 : 5}
             />
+            {/* Walking Route: Sidewalks & Pedestrian Paths to Destination */}
             <Polyline
               coordinates={walkingPolyline}
               strokeColor="#10b981"
@@ -534,4 +549,3 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
 });
-
