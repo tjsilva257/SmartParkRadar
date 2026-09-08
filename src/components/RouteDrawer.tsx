@@ -1,12 +1,13 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Platform, SafeAreaView } from 'react-native';
-import { DestinationTarget, ParkingSpot } from '../types/parking';
+import { View, Text, TouchableOpacity, StyleSheet, Platform, SafeAreaView, ScrollView } from 'react-native';
+import { DestinationTarget, ParkingSpot, DriveRouteOption } from '../types/parking';
 
 interface RouteDrawerProps {
   destination: DestinationTarget;
   optimalSpot: ParkingSpot;
-  drivingMinutes: number;
-  drivingKm: string;
+  selectedRoute: DriveRouteOption | null;
+  availableRoutes: DriveRouteOption[];
+  onSelectRoute: (route: DriveRouteOption) => void;
   onStartNavigation: () => void;
   onCancel: () => void;
 }
@@ -14,11 +15,16 @@ interface RouteDrawerProps {
 export const RouteDrawer: React.FC<RouteDrawerProps> = ({
   destination,
   optimalSpot,
-  drivingMinutes,
-  drivingKm,
+  selectedRoute,
+  availableRoutes,
+  onSelectRoute,
   onStartNavigation,
   onCancel,
 }) => {
+  const driveMinutes = selectedRoute?.durationMinutes || 0;
+  const driveKm = selectedRoute?.distanceKm || '0 km';
+  const traffic = selectedRoute?.traffic;
+
   return (
     <SafeAreaView pointerEvents="box-none" style={styles.container}>
       <View style={styles.card}>
@@ -34,6 +40,53 @@ export const RouteDrawer: React.FC<RouteDrawerProps> = ({
           </Text>
         </View>
 
+        {/* Live Traffic Efficiency Pill */}
+        {traffic && (
+          <View style={styles.trafficRow}>
+            <View style={styles.trafficPill}>
+              <Text style={styles.trafficText}>{traffic.summary}</Text>
+            </View>
+            {traffic.savingsText && (
+              <View style={styles.savingsPill}>
+                <Text style={styles.savingsText}>{traffic.savingsText}</Text>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* Multi-Route Corridor Selector (If alternatives exist) */}
+        {availableRoutes.length > 1 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.routeChipsContainer}
+            style={styles.routeChipsScroll}
+          >
+            {availableRoutes.map((route) => {
+              const isSelected = selectedRoute?.id === route.id;
+              return (
+                <TouchableOpacity
+                  key={route.id}
+                  activeOpacity={0.8}
+                  onPress={() => onSelectRoute(route)}
+                  style={[
+                    styles.routeChip,
+                    isSelected && styles.routeChipSelected,
+                  ]}
+                >
+                  <Text style={[styles.routeChipTitle, isSelected && styles.routeChipTitleSelected]}>
+                    {route.isFastest ? '⚡ ' : ''}{route.summary}
+                  </Text>
+                  <Text style={[styles.routeChipSub, isSelected && styles.routeChipSubSelected]}>
+                    {route.durationMinutes} min ({route.distanceKm})
+                    {route.timeDiffMinutes > 0 ? ` · +${route.timeDiffMinutes} min` : ' · Fastest'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
+
         {/* Journey Leg Breakdown */}
         <View style={styles.legsRow}>
           {/* Leg 1: Drive */}
@@ -42,8 +95,8 @@ export const RouteDrawer: React.FC<RouteDrawerProps> = ({
               <Text style={styles.legIcon}>🚗</Text>
             </View>
             <View>
-              <Text style={styles.legTime}>{drivingMinutes} min</Text>
-              <Text style={styles.legLabel}>Drive ({drivingKm})</Text>
+              <Text style={styles.legTime}>{driveMinutes} min</Text>
+              <Text style={styles.legLabel}>Drive ({driveKm})</Text>
             </View>
           </View>
 
@@ -90,7 +143,7 @@ export const RouteDrawer: React.FC<RouteDrawerProps> = ({
             style={styles.startBtn}
           >
             <Text style={styles.startBtnText}>
-              🧭 Start In-App Navigation
+              🧭 Navigate Fastest Route
             </Text>
           </TouchableOpacity>
 
@@ -147,17 +200,85 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#bfdbfe',
-    marginBottom: 10,
+    marginBottom: 6,
   },
   matchIcon: {
     fontSize: 13,
     marginRight: 6,
   },
   matchText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     color: '#1e40af',
     flex: 1,
+  },
+  trafficRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 8,
+  },
+  trafficPill: {
+    backgroundColor: '#f0fdf4',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  trafficText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#15803d',
+  },
+  savingsPill: {
+    backgroundColor: '#fefce8',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#fef08a',
+  },
+  savingsText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#a16207',
+  },
+  routeChipsScroll: {
+    marginBottom: 8,
+  },
+  routeChipsContainer: {
+    gap: 8,
+  },
+  routeChip: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  routeChipSelected: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#2563eb',
+  },
+  routeChipTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  routeChipTitleSelected: {
+    color: '#1d4ed8',
+  },
+  routeChipSub: {
+    fontSize: 10,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  routeChipSubSelected: {
+    color: '#2563eb',
+    fontWeight: '600',
   },
   legsRow: {
     flexDirection: 'row',
@@ -252,4 +373,3 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
-

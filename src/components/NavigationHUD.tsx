@@ -5,6 +5,7 @@ import { TurnManeuver, NavPhase, ParkingSpot, DestinationTarget } from '../types
 interface NavigationHUDProps {
   currentManeuver: TurnManeuver;
   currentSpeed: number;
+  drivingMinutes?: number;
   navPhase: NavPhase;
   optimalSpot: ParkingSpot;
   destination: DestinationTarget;
@@ -16,6 +17,7 @@ interface NavigationHUDProps {
 export const NavigationHUD: React.FC<NavigationHUDProps> = ({
   currentManeuver,
   currentSpeed,
+  drivingMinutes,
   navPhase,
   optimalSpot,
   destination,
@@ -64,7 +66,7 @@ export const NavigationHUD: React.FC<NavigationHUDProps> = ({
         <View style={styles.statsRow}>
           <View>
             <Text style={styles.etaText}>
-              {navPhase === 'driving' ? '6 min' : '2 min'}
+              {navPhase === 'driving' ? (drivingMinutes ? `${drivingMinutes} min` : '6 min') : '2 min'}
             </Text>
             <Text style={styles.etaSubText}>
               {navPhase === 'driving'

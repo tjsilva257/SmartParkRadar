@@ -36,3 +36,23 @@ export interface TurnManeuver {
 
 export type NavPhase = 'driving' | 'walking';
 
+export type TrafficLevel = 'clear' | 'moderate' | 'heavy';
+
+export interface TrafficInfo {
+  level: TrafficLevel;
+  delayMinutes: number;
+  summary: string;
+  savingsText?: string;
+}
+
+export interface DriveRouteOption {
+  id: string;
+  summary: string;
+  coordinates: Coordinate[];
+  distanceKm: string;
+  durationMinutes: number;
+  traffic: TrafficInfo;
+  isFastest: boolean;
+  timeDiffMinutes: number;
+  maneuvers: TurnManeuver[];
+}

@@ -10,9 +10,9 @@ import {
 import MapView, { Marker, Circle, Polyline, Region, MapType } from 'react-native-maps';
 import * as Location from 'expo-location';
 
-import { Coordinate, DestinationTarget, ParkingSpot, TurnManeuver, NavPhase } from '../src/types/parking';
+import { Coordinate, DestinationTarget, ParkingSpot, TurnManeuver, NavPhase, DriveRouteOption } from '../src/types/parking';
 import { scanNearbyParkingSpots } from '../src/services/parkingScanner';
-import { fetchRoadRoute } from '../src/services/routingService';
+import { fetchMultiDriveRoutes, fetchWalkingRoute } from '../src/services/routingService';
 import { SearchBar } from '../src/components/SearchBar';
 import { MapToolsMenu } from '../src/components/MapToolsMenu';
 import { RouteDrawer } from '../src/components/RouteDrawer';
@@ -37,7 +37,9 @@ export default function MapScreen() {
   const [optimalSpot, setOptimalSpot] = useState<ParkingSpot | null>(null);
   const [selectedSpot, setSelectedSpot] = useState<ParkingSpot | null>(null);
 
-  // Real Road-Following Route State (via OSRM)
+  // Real Road-Following Route State (via OSRM with Live Traffic alternatives)
+  const [availableDriveRoutes, setAvailableDriveRoutes] = useState<DriveRouteOption[]>([]);
+  const [selectedDriveRoute, setSelectedDriveRoute] = useState<DriveRouteOption | null>(null);
   const [drivingPolyline, setDrivingPolyline] = useState<Coordinate[]>([]);
   const [walkingPolyline, setWalkingPolyline] = useState<Coordinate[]>([]);
   const [drivingStats, setDrivingStats] = useState({ km: '0 km', min: 0 });
@@ -142,12 +144,14 @@ export default function MapScreen() {
     }
   }, [destination, scannedOptimal, isNavigating]);
 
-  // Fetch REAL ROAD-FOLLOWING ROUTES (via OSRM) for driving and walking legs
+  // Fetch REAL ROAD-FOLLOWING ROUTES (via OSRM) with Live Traffic Alternatives
   useEffect(() => {
     let isMounted = true;
 
     async function loadRoadRoute() {
       if (!destination || !optimalSpot) {
+        setAvailableDriveRoutes([]);
+        setSelectedDriveRoute(null);
         setDrivingPolyline([]);
         setWalkingPolyline([]);
         setRoadManeuvers([]);
@@ -155,24 +159,31 @@ export default function MapScreen() {
       }
 
       try {
-        const [driveResult, walkResult] = await Promise.all([
-          fetchRoadRoute(userCoord, optimalSpot.coordinate, 'driving'),
-          fetchRoadRoute(optimalSpot.coordinate, destination.coordinate, 'walking'),
+        const [driveRoutes, walkCoords] = await Promise.all([
+          fetchMultiDriveRoutes(userCoord, optimalSpot.coordinate),
+          fetchWalkingRoute(optimalSpot.coordinate, destination.coordinate),
         ]);
 
         if (isMounted) {
-          setDrivingPolyline(driveResult.coordinates);
-          setWalkingPolyline(walkResult.coordinates);
-          setDrivingStats({
-            km: driveResult.distanceFormatted,
-            min: driveResult.durationMinutes,
-          });
-          setRoadManeuvers(driveResult.maneuvers);
+          setAvailableDriveRoutes(driveRoutes);
+          // Route #0 is always the fastest, most efficient route based on live traffic
+          const fastestRoute = driveRoutes[0] || null;
+          setSelectedDriveRoute(fastestRoute);
+
+          if (fastestRoute) {
+            setDrivingPolyline(fastestRoute.coordinates);
+            setDrivingStats({
+              km: fastestRoute.distanceKm,
+              min: fastestRoute.durationMinutes,
+            });
+            setRoadManeuvers(fastestRoute.maneuvers);
+          }
+          setWalkingPolyline(walkCoords);
 
           // Fit camera smoothly over the full real road route
-          if (driveResult.coordinates.length > 0 && !isNavigating) {
-            const sampleStep = Math.max(1, Math.floor(driveResult.coordinates.length / 10));
-            const keyWaypoints = driveResult.coordinates.filter((_, idx) => idx % sampleStep === 0);
+          if (fastestRoute && fastestRoute.coordinates.length > 0 && !isNavigating) {
+            const sampleStep = Math.max(1, Math.floor(fastestRoute.coordinates.length / 10));
+            const keyWaypoints = fastestRoute.coordinates.filter((_, idx) => idx % sampleStep === 0);
             keyWaypoints.push(destination.coordinate);
 
             setTimeout(() => {
@@ -184,7 +195,7 @@ export default function MapScreen() {
           }
         }
       } catch (err) {
-        // Handled inside fetchRoadRoute fallback
+        // Handled inside routing service fallback
       }
     }
 
@@ -194,6 +205,17 @@ export default function MapScreen() {
       isMounted = false;
     };
   }, [destination, optimalSpot, userCoord, isNavigating]);
+
+  // Handle switching between alternative routes
+  const handleSelectDriveRoute = (route: DriveRouteOption) => {
+    setSelectedDriveRoute(route);
+    setDrivingPolyline(route.coordinates);
+    setDrivingStats({
+      km: route.distanceKm,
+      min: route.durationMinutes,
+    });
+    setRoadManeuvers(route.maneuvers);
+  };
 
   // Turn-by-Turn Maneuvers along the real in-app road route
   const currentManeuver: TurnManeuver = useMemo(() => {
@@ -313,6 +335,8 @@ export default function MapScreen() {
     setDestination(null);
     setOptimalSpot(null);
     setSelectedSpot(null);
+    setAvailableDriveRoutes([]);
+    setSelectedDriveRoute(null);
     setDrivingPolyline([]);
     setWalkingPolyline([]);
     setIsNavigating(false);
@@ -367,21 +391,39 @@ export default function MapScreen() {
           />
         )}
 
-        {/* Real Road-Following Polylines */}
+        {/* Real Road-Following Polylines with Live Traffic alternatives */}
         {destination && optimalSpot && (
           <>
-            {/* Driving Route: Real Highways & Streets to Parking */}
+            {/* Alternative Driving Corridors (Muted Slate with dash) */}
+            {!isNavigating &&
+              availableDriveRoutes
+                .filter((r) => r.id !== selectedDriveRoute?.id)
+                .map((altRoute) => (
+                  <Polyline
+                    key={altRoute.id}
+                    coordinates={altRoute.coordinates}
+                    strokeColor="#94a3b8"
+                    strokeWidth={4}
+                    lineDashPattern={[6, 3]}
+                    zIndex={10}
+                  />
+                ))}
+
+            {/* Selected Most Efficient Driving Route (Vibrant Royal Blue) */}
             <Polyline
               coordinates={drivingPolyline}
               strokeColor="#2563eb"
-              strokeWidth={isNavigating ? 7 : 5}
+              strokeWidth={isNavigating ? 7 : 6}
+              zIndex={20}
             />
+
             {/* Walking Route: Sidewalks & Pedestrian Paths to Destination */}
             <Polyline
               coordinates={walkingPolyline}
               strokeColor="#10b981"
               strokeWidth={4}
               lineDashPattern={[6, 4]}
+              zIndex={25}
             />
           </>
         )}
@@ -450,8 +492,9 @@ export default function MapScreen() {
         <RouteDrawer
           destination={destination}
           optimalSpot={optimalSpot}
-          drivingMinutes={drivingStats.min}
-          drivingKm={drivingStats.km}
+          selectedRoute={selectedDriveRoute}
+          availableRoutes={availableDriveRoutes}
+          onSelectRoute={handleSelectDriveRoute}
           onStartNavigation={handleStartInAppNavigation}
           onCancel={handleClearDestination}
         />
@@ -462,6 +505,7 @@ export default function MapScreen() {
         <NavigationHUD
           currentManeuver={currentManeuver}
           currentSpeed={currentSpeed}
+          drivingMinutes={drivingStats.min}
           navPhase={navPhase}
           optimalSpot={optimalSpot}
           destination={destination}
