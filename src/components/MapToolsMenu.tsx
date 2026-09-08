@@ -12,6 +12,7 @@ interface MapToolsMenuProps {
   onToggleTraffic: () => void;
   onToggleScratchMap?: () => void;
   onCycleCameraDisplayMode?: () => void;
+  onOpenHazardReport?: () => void;
   onRecenter: () => void;
   bottomOffset?: number;
 }
@@ -25,6 +26,7 @@ export const MapToolsMenu: React.FC<MapToolsMenuProps> = ({
   onToggleTraffic,
   onToggleScratchMap,
   onCycleCameraDisplayMode,
+  onOpenHazardReport,
   onRecenter,
   bottomOffset = 40,
 }) => {
@@ -32,6 +34,10 @@ export const MapToolsMenu: React.FC<MapToolsMenuProps> = ({
 
   const handleReportHazard = () => {
     setIsOpen(false);
+    if (onOpenHazardReport) {
+      onOpenHazardReport();
+      return;
+    }
     Alert.alert(
       '⚠️ Report Parking Hazard',
       'Select a hazard to broadcast in real time to nearby drivers:',

@@ -11,7 +11,7 @@ import {
 import MapView, { Marker, Circle, Polyline, Region, MapType } from 'react-native-maps';
 import * as Location from 'expo-location';
 
-import { Coordinate, DestinationTarget, ParkingSpot, TurnManeuver, NavPhase, DriveRouteOption, CameraWarning, SpeedAlert, SpeedCamera, CameraDisplayMode } from '../src/types/parking';
+import { Coordinate, DestinationTarget, ParkingSpot, TurnManeuver, NavPhase, DriveRouteOption, CameraWarning, SpeedAlert, SpeedCamera, CameraDisplayMode, RoadHazard, SavedLocation } from '../src/types/parking';
 import { scanNearbyParkingSpots } from '../src/services/parkingScanner';
 import { fetchMultiDriveRoutes, fetchWalkingRoute } from '../src/services/routingService';
 import { SPEED_CAMERAS, getUpcomingCameraWarning, calculateSpeedFine } from '../src/services/cameraRadarService';
@@ -19,6 +19,10 @@ import { SearchBar } from '../src/components/SearchBar';
 import { MapToolsMenu } from '../src/components/MapToolsMenu';
 import { RouteDrawer } from '../src/components/RouteDrawer';
 import { NavigationHUD } from '../src/components/NavigationHUD';
+import { HazardReportModal } from '../src/components/HazardReportModal';
+import { getReportedHazards, addReportedHazard, confirmHazard } from '../src/services/hazardService';
+import { PoiPreviewCard } from '../src/components/PoiPreviewCard';
+import { getFavorites, addFavorite, removeFavorite, isFavorite } from '../src/services/favoritesService';
 import { voiceGuidance } from '../src/services/voiceGuidanceService';
 import { ScratchMapOverlay } from '../src/components/ScratchMapOverlay';
 import {
@@ -53,6 +57,7 @@ export default function MapScreen() {
   const mapRef = useRef<MapView | null>(null);
   const hasFittedRouteForDest = useRef<string | null>(null);
   const userCoordRef = useRef<Coordinate>(DEFAULT_COORDS);
+  const lastPoiClickTimestamp = useRef(0);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [region, setRegion] = useState<Region>({
     ...DEFAULT_COORDS,
@@ -92,6 +97,36 @@ export default function MapScreen() {
   const [cameraDisplayMode, setCameraDisplayMode] = useState<CameraDisplayMode>('always');
   const [exploredGeometry, setExploredGeometry] = useState<ExploredGeometry>(null);
 
+  // Road Hazards State
+  const [isHazardModalVisible, setIsHazardModalVisible] = useState(false);
+  const [reportedHazards, setReportedHazards] = useState<RoadHazard[]>([]);
+
+  // Places & POI State (Cafes, Restaurants, Apple Maps Points of Interest)
+  const [selectedPoi, setSelectedPoi] = useState<DestinationTarget | null>(null);
+  const [favoritesList, setFavoritesList] = useState<SavedLocation[]>([]);
+
+  // Load active road hazards & favorites on mount
+  useEffect(() => {
+    getReportedHazards().then(setReportedHazards);
+    getFavorites().then(setFavoritesList);
+  }, []);
+
+  const handleNavigateToPoi = (place: DestinationTarget) => {
+    setSelectedPoi(null);
+    setDestination(place);
+  };
+
+  const handleToggleFavoritePoi = async (place: DestinationTarget) => {
+    const isFav = isFavorite(place, favoritesList);
+    let updated: SavedLocation[];
+    if (isFav) {
+      updated = await removeFavorite(place.id || place.name);
+    } else {
+      updated = await addFavorite(place);
+    }
+    setFavoritesList(updated);
+  };
+
   const handleCycleCameraDisplayMode = () => {
     setCameraDisplayMode((prev) => {
       if (prev === 'always') return 'trip_only';
@@ -103,6 +138,38 @@ export default function MapScreen() {
   const shouldShowCameraIcons =
     cameraDisplayMode === 'always' ||
     (cameraDisplayMode === 'trip_only' && (isNavigating || Boolean(destination)));
+
+  const handleSubmitHazard = async (hazardData: Parameters<typeof addReportedHazard>[0]) => {
+    const newHazard = await addReportedHazard(hazardData);
+    setReportedHazards((prev) => [newHazard, ...prev]);
+
+    if (!isVoiceMuted) {
+      voiceGuidance.speakAnnouncement(`Melding geplaatst: ${newHazard.title} op ${newHazard.roadName}`);
+    }
+
+    Alert.alert(
+      '⚠️ Melding Live!',
+      `Je melding voor "${newHazard.title}" op ${newHazard.roadName} is succesvol uitgezonden.`,
+      [{ text: 'OK' }]
+    );
+  };
+
+  const handlePressHazard = (hazard: RoadHazard) => {
+    Alert.alert(
+      `⚠️ ${hazard.title}`,
+      `Locatie: ${hazard.roadName}\nGemeld door: ${hazard.reporterLabel || 'Weggebruiker'}\n${hazard.note ? `Opmerking: ${hazard.note}\n` : ''}Bevestigingen: ${hazard.confirmations}x`,
+      [
+        {
+          text: '👍 Bevestig Gevaar (+1)',
+          onPress: async () => {
+            const updated = await confirmHazard(hazard.id);
+            setReportedHazards(updated);
+          },
+        },
+        { text: 'Sluiten', style: 'cancel' },
+      ]
+    );
+  };
 
   // Load persisted Scratch Map geometry & start background tracker
   useEffect(() => {
@@ -567,14 +634,70 @@ export default function MapScreen() {
         showsCompass={true}
         showsScale={true}
         showsBuildings={true}
+        showsPointsOfInterests={true}
         scrollEnabled={true}
         zoomEnabled={true}
         rotateEnabled={true}
         pitchEnabled={true}
-        onPress={() => {
+        onPoiClick={(e) => {
           if (!isNavigating) {
+            lastPoiClickTimestamp.current = Date.now();
+            const { name, coordinate, placeId } = e.nativeEvent;
+            setSelectedPoi({
+              id: placeId || `poi_${Date.now()}`,
+              name: name || 'Interessante Locatie',
+              subtitle: 'Locatie op de kaart • Tik om te navigeren',
+              coordinate: {
+                latitude: coordinate.latitude,
+                longitude: coordinate.longitude,
+              },
+            });
             setSelectedSpot(null);
             Keyboard.dismiss();
+          }
+        }}
+        onPress={async (e) => {
+          if (isNavigating) return;
+          Keyboard.dismiss();
+
+          // Prevent double fire if onPoiClick just ran
+          if (Date.now() - lastPoiClickTimestamp.current < 600) {
+            return;
+          }
+
+          // If a POI preview is already displayed, tap outside dismisses it
+          if (selectedPoi) {
+            setSelectedPoi(null);
+            setSelectedSpot(null);
+            return;
+          }
+          setSelectedSpot(null);
+
+          // Apple Maps / iOS native icon & map tap detection:
+          // Apple MapKit embeds POIs into the base vector tiles. Tapping them emits onPress with coordinate.
+          // Reverse-geocoding the tapped coordinate with iOS CLGeocoder resolves the venue/business name.
+          const coord = e.nativeEvent?.coordinate;
+          if (coord) {
+            try {
+              const geocoded = await Location.reverseGeocodeAsync(coord);
+              if (geocoded && geocoded.length > 0) {
+                const p = geocoded[0];
+                const venueName = p.name || p.street || 'Gekozen Locatie';
+                const subtitleParts = [p.street, p.city].filter(Boolean);
+                const subtitle =
+                  subtitleParts.length > 0 ? subtitleParts.join(', ') : 'Locatie op de kaart';
+
+                setSelectedPoi({
+                  id: `apple_map_poi_${coord.latitude.toFixed(5)}_${coord.longitude.toFixed(5)}`,
+                  name: venueName,
+                  subtitle,
+                  city: p.city || undefined,
+                  coordinate: coord,
+                });
+              }
+            } catch {
+              // Silently ignore geocoding failure
+            }
           }
         }}
       >
@@ -708,10 +831,67 @@ export default function MapScreen() {
               </Marker>
             );
           })}
+
+        {/* Real User & Community Reported Hazards (With Hectometerpaal Badges on Highways) */}
+        {reportedHazards.map((h) => {
+          const emoji =
+            h.category === 'mobile_camera'
+              ? '📸'
+              : h.category === 'parking_warden'
+              ? '👮'
+              : h.category === 'accident'
+              ? '🚗'
+              : h.category === 'road_work'
+              ? '🚧'
+              : h.category === 'traffic_jam'
+              ? '🚙'
+              : '⚠️';
+
+          return (
+            <Marker
+              key={h.id}
+              coordinate={h.coordinate}
+              title={`⚠️ ${h.title}`}
+              description={`${h.roadName}${h.note ? ` • ${h.note}` : ''}`}
+              zIndex={30}
+              onPress={() => handlePressHazard(h)}
+            >
+              <View style={styles.hazardMarkerWrapper}>
+                <View style={styles.hazardMarkerBubble}>
+                  <Text style={styles.hazardMarkerEmoji}>{emoji}</Text>
+                </View>
+                {h.hectometerPost ? (
+                  <View style={styles.hectoMarkerBadge}>
+                    <Text style={styles.hectoMarkerBadgeText}>
+                      {h.hectometerPost.road} {h.hectometerPost.hectometer.toFixed(1)} {h.hectometerPost.carriageway}
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={styles.streetHazardBadge}>
+                    <Text style={styles.streetHazardBadgeText}>LIVE</Text>
+                  </View>
+                )}
+              </View>
+            </Marker>
+          );
+        })}
+
       </MapView>
 
+      {/* 1B. POI ACTION PREVIEW CARD (When any Cafe, Restaurant, or Map POI is Tapped) */}
+      {!isNavigating && !destination && selectedPoi && (
+        <PoiPreviewCard
+          place={selectedPoi}
+          userLocation={userCoord}
+          isFavorite={isFavorite(selectedPoi, favoritesList)}
+          onNavigate={handleNavigateToPoi}
+          onToggleFavorite={handleToggleFavoritePoi}
+          onClose={() => setSelectedPoi(null)}
+        />
+      )}
+
       {/* 2. BOTTOM SEARCH BAR & DRAWER (Slide up for recents & favorites) */}
-      {!isNavigating && !destination && (
+      {!isNavigating && !destination && !selectedPoi && (
         <SearchBar
           currentDestination={destination}
           userLocation={userCoord}
@@ -742,8 +922,9 @@ export default function MapScreen() {
         onToggleTraffic={() => setShowTraffic((p) => !p)}
         onToggleScratchMap={() => setShowScratchMap((p) => !p)}
         onCycleCameraDisplayMode={handleCycleCameraDisplayMode}
+        onOpenHazardReport={() => setIsHazardModalVisible(true)}
         onRecenter={handleRecenter}
-        bottomOffset={isNavigating ? 140 : destination ? 260 : 100}
+        bottomOffset={isNavigating ? 140 : destination ? 260 : selectedPoi ? 190 : 100}
       />
 
       {/* 4. OVERVIEW ROUTE DRAWER (When Destination is Set) */}
@@ -777,6 +958,14 @@ export default function MapScreen() {
           onCycleSpeedTest={handleCycleSpeedTest}
         />
       )}
+
+      {/* 6. REAL-TIME HAZARD REPORT MODAL (With Dutch Hectometerpaaltjes Support) */}
+      <HazardReportModal
+        visible={isHazardModalVisible}
+        userLocation={userCoord}
+        onClose={() => setIsHazardModalVisible(false)}
+        onSubmitHazard={handleSubmitHazard}
+      />
     </View>
   );
 }
@@ -925,6 +1114,59 @@ const styles = StyleSheet.create({
   floatingRadarText: {
     fontSize: 11,
     fontWeight: '800',
+    color: '#ffffff',
+  },
+  hazardMarkerWrapper: {
+    alignItems: 'center',
+  },
+  hazardMarkerBubble: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#ffffff',
+    borderWidth: 2,
+    borderColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#ef4444',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 5,
+    elevation: 5,
+  },
+  hazardMarkerEmoji: {
+    fontSize: 17,
+  },
+  hectoMarkerBadge: {
+    backgroundColor: '#056636',
+    borderWidth: 1.2,
+    borderColor: '#044e29',
+    borderRadius: 5,
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
+    marginTop: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  hectoMarkerBadgeText: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: '#ffffff',
+    letterSpacing: 0.4,
+  },
+  streetHazardBadge: {
+    backgroundColor: '#ef4444',
+    borderRadius: 5,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    marginTop: 2,
+  },
+  streetHazardBadgeText: {
+    fontSize: 7,
+    fontWeight: '900',
     color: '#ffffff',
   },
 });

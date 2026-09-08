@@ -98,3 +98,34 @@ export interface CameraWarning {
 
 export type CameraDisplayMode = 'always' | 'trip_only' | 'off';
 
+export type HazardCategory =
+  | 'mobile_camera'
+  | 'parking_warden'
+  | 'accident'
+  | 'road_work'
+  | 'debris'
+  | 'traffic_jam';
+
+export type CarriagewayDirection = 'Li' | 'Re' | 'all';
+
+export interface HectometerPosition {
+  road: string;
+  hectometer: number;
+  carriageway: CarriagewayDirection;
+  letterCode?: string;
+  description?: string;
+}
+
+export interface RoadHazard {
+  id: string;
+  category: HazardCategory;
+  title: string;
+  roadName: string;
+  hectometerPost?: HectometerPosition;
+  coordinate: Coordinate;
+  reportedAt: number;
+  reporterLabel?: string;
+  confirmations: number;
+  note?: string;
+}
+

@@ -137,6 +137,14 @@ class VoiceGuidanceService {
     const phrase = `Speed limit changed. Maximum speed is now ${newLimit} kilometers per hour.`;
     this.speakText(phrase, false);
   }
+
+  /**
+   * Announces general road hazard alerts and confirmation notices.
+   */
+  public speakAnnouncement(text: string, isMuted: boolean = false): void {
+    if (isMuted || !text) return;
+    this.speakText(text, false);
+  }
 }
 
 export const voiceGuidance = new VoiceGuidanceService();
