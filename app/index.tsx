@@ -6,13 +6,15 @@ import {
   StatusBar,
   Alert,
   Keyboard,
+  Platform,
 } from 'react-native';
 import MapView, { Marker, Circle, Polyline, Region, MapType } from 'react-native-maps';
 import * as Location from 'expo-location';
 
-import { Coordinate, DestinationTarget, ParkingSpot, TurnManeuver, NavPhase, DriveRouteOption } from '../src/types/parking';
+import { Coordinate, DestinationTarget, ParkingSpot, TurnManeuver, NavPhase, DriveRouteOption, CameraWarning, SpeedAlert, SpeedCamera } from '../src/types/parking';
 import { scanNearbyParkingSpots } from '../src/services/parkingScanner';
 import { fetchMultiDriveRoutes, fetchWalkingRoute } from '../src/services/routingService';
+import { SPEED_CAMERAS, getUpcomingCameraWarning, calculateSpeedFine } from '../src/services/cameraRadarService';
 import { SearchBar } from '../src/components/SearchBar';
 import { MapToolsMenu } from '../src/components/MapToolsMenu';
 import { RouteDrawer } from '../src/components/RouteDrawer';
@@ -70,6 +72,10 @@ export default function MapScreen() {
   const [isVoiceMuted, setIsVoiceMuted] = useState(false);
   const [simStep, setSimStep] = useState(0);
   const [simIntervalId, setSimIntervalId] = useState<ReturnType<typeof setInterval> | null>(null);
+
+  // Flitsmeister Radar & Speed Warning State
+  const [speedLimit, setSpeedLimit] = useState(50); // km/h (dynamic according to road or speed camera)
+  const [cameraWarning, setCameraWarning] = useState<CameraWarning | null>(null);
 
   // Map Controls State
   const [mapType, setMapType] = useState<MapType>('standard');
@@ -270,6 +276,41 @@ export default function MapScreen() {
     };
   }, [navPhase, simStep, roadManeuvers, optimalSpot, destination, drivingStats]);
 
+  // Real-time CJIB Traffic Fine Calculation
+  const speedAlert: SpeedAlert = useMemo(() => {
+    return calculateSpeedFine(currentSpeed, speedLimit);
+  }, [currentSpeed, speedLimit]);
+
+  // Real-time Camera Radar Scanner & Speed Limit Adaptation
+  useEffect(() => {
+    const alert = getUpcomingCameraWarning(vehiclePosition, 1500);
+    setCameraWarning(alert);
+
+    if (alert) {
+      setSpeedLimit(alert.camera.speedLimit);
+    } else if (isNavigating) {
+      const isHighway =
+        currentManeuver.street.toLowerCase().includes('a') ||
+        currentManeuver.instruction.toLowerCase().includes('highway') ||
+        currentManeuver.instruction.toLowerCase().includes('snelweg');
+      setSpeedLimit(isHighway ? 100 : 50);
+    }
+  }, [vehiclePosition.latitude, vehiclePosition.longitude, isNavigating, currentManeuver.street, currentManeuver.instruction]);
+
+  // Interactive Speed Cycle Tester (Tap speedometer to test fine risk!)
+  const handleCycleSpeedTest = () => {
+    setCurrentSpeed((prev) => {
+      if (prev <= speedLimit) {
+        return speedLimit + 6; // Minor overspeed (+6 km/h warning)
+      } else if (prev < speedLimit + 14) {
+        return speedLimit + 18; // Fine risk! (+18 km/h, €210 boete)
+      } else if (prev < speedLimit + 25) {
+        return speedLimit + 32; // Critical fine risk! (+32 km/h, €540 boete)
+      }
+      return Math.max(30, speedLimit - 5); // Return to safe speed
+    });
+  };
+
   // Center to user/vehicle location
   const handleRecenter = () => {
     const target = isNavigating ? vehiclePosition : userCoord;
@@ -334,6 +375,19 @@ export default function MapScreen() {
         const bearing = calculateBearing(prevPoint, nextPoint);
 
         setVehiclePosition(nextPoint);
+
+        // Check for upcoming camera near nextPoint
+        const camAlert = getUpcomingCameraWarning(nextPoint, 1500);
+        setCameraWarning(camAlert);
+        if (camAlert) {
+          setSpeedLimit(camAlert.camera.speedLimit);
+          // When approaching camera, simulate brief acceleration to demonstrate fine alert
+          if (camAlert.distanceMeters <= 550 && camAlert.distanceMeters >= 180) {
+            setCurrentSpeed(camAlert.camera.speedLimit + 18);
+          } else {
+            setCurrentSpeed(camAlert.camera.speedLimit);
+          }
+        }
 
         // Keep camera locked in 3D driver cockpit view - altitude: 300 ensures iOS never zooms out!
         mapRef.current?.animateCamera(
@@ -513,6 +567,45 @@ export default function MapScreen() {
             </View>
           </Marker>
         )}
+
+        {/* Real Speed Cameras & Flitsmeister Radar Traps */}
+        {SPEED_CAMERAS.map((cam) => {
+          const isTraject = cam.type === 'traject';
+          const isMobile = cam.type === 'mobile';
+          const isRedLight = cam.type === 'red_light';
+          return (
+            <Marker
+              key={cam.id}
+              coordinate={cam.coordinate}
+              title={cam.name}
+              description={`${cam.road} • Max ${cam.speedLimit} km/h`}
+              zIndex={28}
+              onPress={() => {
+                Alert.alert(
+                  `📸 ${cam.name}`,
+                  `${cam.road}\n\nType: ${
+                    isTraject
+                      ? 'Trajectcontrole'
+                      : isMobile
+                      ? 'Mobiele Controle'
+                      : isRedLight
+                      ? 'Roodlicht & Flitser'
+                      : 'Vaste Flitspaal'
+                  }\nSnelheidslimiet: ${cam.speedLimit} km/h\n\n${cam.description}`
+                );
+              }}
+            >
+              <View style={[styles.cameraMarkerBubble, isMobile && styles.cameraMarkerMobile]}>
+                <Text style={styles.cameraMarkerEmoji}>
+                  {isTraject ? '⏱️' : isMobile ? '🚓' : isRedLight ? '🚦' : '📸'}
+                </Text>
+                <View style={styles.cameraMarkerSign}>
+                  <Text style={styles.cameraMarkerSignText}>{cam.speedLimit}</Text>
+                </View>
+              </View>
+            </Marker>
+          );
+        })}
       </MapView>
 
       {/* 2. TOP SEARCH BAR (Real geocoding search & suggestions) */}
@@ -523,6 +616,18 @@ export default function MapScreen() {
           onSelectDestination={setDestination}
           onClearDestination={handleClearDestination}
         />
+      )}
+
+      {/* 2B. FLOATING RADAR WARNING (When driving in passive radar mode) */}
+      {!isNavigating && cameraWarning && (
+        <View style={[styles.floatingRadarPill, cameraWarning.isUrgent && styles.floatingRadarPillUrgent]}>
+          <Text style={styles.floatingRadarEmoji}>
+            {cameraWarning.camera.type === 'traject' ? '⏱️' : cameraWarning.camera.type === 'mobile' ? '🚓' : '📸'}
+          </Text>
+          <Text style={styles.floatingRadarText} numberOfLines={1}>
+            {cameraWarning.camera.name} ({cameraWarning.distanceMeters}m) • Max {cameraWarning.camera.speedLimit} km/h
+          </Text>
+        </View>
       )}
 
       {/* 3. CLUTTER-FREE MAP CONTROLS (Standalone Re-center + Separate Tools Menu) */}
@@ -548,11 +653,14 @@ export default function MapScreen() {
         />
       )}
 
-      {/* 5. IN-APP TURN-BY-TURN NAVIGATION HUD */}
+      {/* 5. IN-APP TURN-BY-TURN NAVIGATION HUD (With Flitsers & Fine Risk Warnings) */}
       {isNavigating && destination && optimalSpot && (
         <NavigationHUD
           currentManeuver={currentManeuver}
           currentSpeed={currentSpeed}
+          speedLimit={speedLimit}
+          speedAlert={speedAlert}
+          cameraWarning={cameraWarning}
           drivingMinutes={drivingStats.min}
           navPhase={navPhase}
           optimalSpot={optimalSpot}
@@ -560,6 +668,7 @@ export default function MapScreen() {
           isVoiceMuted={isVoiceMuted}
           onToggleVoice={() => setIsVoiceMuted(!isVoiceMuted)}
           onEndNavigation={handleStopNavigation}
+          onCycleSpeedTest={handleCycleSpeedTest}
         />
       )}
     </View>
@@ -639,5 +748,77 @@ const styles = StyleSheet.create({
   },
   vehiclePuckIcon: {
     fontSize: 16,
+  },
+  cameraMarkerBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1e1b4b',
+    borderWidth: 2,
+    borderColor: '#6366f1',
+    borderRadius: 14,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  cameraMarkerMobile: {
+    backgroundColor: '#450a0a',
+    borderColor: '#ef4444',
+  },
+  cameraMarkerEmoji: {
+    fontSize: 14,
+    marginRight: 4,
+  },
+  cameraMarkerSign: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#dc2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cameraMarkerSignText: {
+    fontSize: 8,
+    fontWeight: '900',
+    color: '#000000',
+  },
+  floatingRadarPill: {
+    position: 'absolute',
+    top: Platform.OS === 'android' ? 116 : 130,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(30, 27, 75, 0.95)',
+    borderWidth: 1.5,
+    borderColor: '#6366f1',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    shadowColor: '#4f46e5',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 8,
+    zIndex: 35,
+    maxWidth: '90%',
+  },
+  floatingRadarPillUrgent: {
+    backgroundColor: 'rgba(127, 29, 29, 0.95)',
+    borderColor: '#ef4444',
+    shadowColor: '#ef4444',
+  },
+  floatingRadarEmoji: {
+    fontSize: 15,
+    marginRight: 6,
+  },
+  floatingRadarText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#ffffff',
   },
 });

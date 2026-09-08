@@ -56,3 +56,31 @@ export interface DriveRouteOption {
   timeDiffMinutes: number;
   maneuvers: TurnManeuver[];
 }
+
+export type CameraType = 'fixed' | 'mobile' | 'traject' | 'red_light';
+
+export interface SpeedCamera {
+  id: string;
+  name: string;
+  road: string;
+  type: CameraType;
+  speedLimit: number;
+  coordinate: Coordinate;
+  description?: string;
+}
+
+export interface SpeedAlert {
+  isOverLimit: boolean;
+  isWayOverLimit: boolean;
+  speedLimit: number;
+  currentSpeed: number;
+  overBy: number;
+  fineEstimateEur: number;
+}
+
+export interface CameraWarning {
+  camera: SpeedCamera;
+  distanceMeters: number;
+  isUrgent: boolean;
+}
+
