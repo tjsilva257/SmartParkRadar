@@ -23,8 +23,26 @@ const DEFAULT_COORDS: Coordinate = {
   longitude: 4.9041,
 };
 
+function calculateBearing(start: Coordinate, end: Coordinate): number {
+  const startLat = (start.latitude * Math.PI) / 180;
+  const startLng = (start.longitude * Math.PI) / 180;
+  const endLat = (end.latitude * Math.PI) / 180;
+  const endLng = (end.longitude * Math.PI) / 180;
+
+  const dLng = endLng - startLng;
+  const y = Math.sin(dLng) * Math.cos(endLat);
+  const x =
+    Math.cos(startLat) * Math.sin(endLat) -
+    Math.sin(startLat) * Math.cos(endLat) * Math.cos(dLng);
+
+  let bearing = (Math.atan2(y, x) * 180) / Math.PI;
+  return (bearing + 360) % 360;
+}
+
 export default function MapScreen() {
   const mapRef = useRef<MapView | null>(null);
+  const hasFittedRouteForDest = useRef<string | null>(null);
+  const userCoordRef = useRef<Coordinate>(DEFAULT_COORDS);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [region, setRegion] = useState<Region>({
     ...DEFAULT_COORDS,
@@ -70,8 +88,11 @@ export default function MapScreen() {
   const [vehiclePosition, setVehiclePosition] = useState<Coordinate>(userCoord);
 
   useEffect(() => {
-    setVehiclePosition(userCoord);
-  }, [userCoord.latitude, userCoord.longitude]);
+    userCoordRef.current = userCoord;
+    if (!isNavigating) {
+      setVehiclePosition(userCoord);
+    }
+  }, [userCoord.latitude, userCoord.longitude, isNavigating]);
 
   // Request foreground location permissions & start watch subscription
   useEffect(() => {
@@ -159,8 +180,9 @@ export default function MapScreen() {
       }
 
       try {
+        const startCoord = userCoordRef.current || userCoord;
         const [driveRoutes, walkCoords] = await Promise.all([
-          fetchMultiDriveRoutes(userCoord, optimalSpot.coordinate),
+          fetchMultiDriveRoutes(startCoord, optimalSpot.coordinate),
           fetchWalkingRoute(optimalSpot.coordinate, destination.coordinate),
         ]);
 
@@ -180,8 +202,15 @@ export default function MapScreen() {
           }
           setWalkingPolyline(walkCoords);
 
-          // Fit camera smoothly over the full real road route
-          if (fastestRoute && fastestRoute.coordinates.length > 0 && !isNavigating) {
+          // Fit camera smoothly over the full real road route ONCE per destination selection
+          const destKey = `${destination.name}-${optimalSpot.id}`;
+          if (
+            fastestRoute &&
+            fastestRoute.coordinates.length > 0 &&
+            !isNavigating &&
+            hasFittedRouteForDest.current !== destKey
+          ) {
+            hasFittedRouteForDest.current = destKey;
             const sampleStep = Math.max(1, Math.floor(fastestRoute.coordinates.length / 10));
             const keyWaypoints = fastestRoute.coordinates.filter((_, idx) => idx % sampleStep === 0);
             keyWaypoints.push(destination.coordinate);
@@ -204,7 +233,7 @@ export default function MapScreen() {
     return () => {
       isMounted = false;
     };
-  }, [destination, optimalSpot, userCoord, isNavigating]);
+  }, [destination?.name, optimalSpot?.id, isNavigating]);
 
   // Handle switching between alternative routes
   const handleSelectDriveRoute = (route: DriveRouteOption) => {
@@ -247,7 +276,7 @@ export default function MapScreen() {
     if (mapRef.current) {
       if (isNavigating) {
         mapRef.current.animateCamera(
-          { center: target, pitch: 55, heading: 25, zoom: 18 },
+          { center: target, pitch: 60, heading: 0, altitude: 300, zoom: 18.5 },
           { duration: 600 }
         );
       } else {
@@ -255,8 +284,8 @@ export default function MapScreen() {
           {
             latitude: target.latitude,
             longitude: target.longitude,
-            latitudeDelta: 0.01,
-            longitudeDelta: 0.01,
+            latitudeDelta: 0.008,
+            longitudeDelta: 0.008,
           },
           600
         );
@@ -271,15 +300,20 @@ export default function MapScreen() {
     setNavPhase('driving');
     setSimStep(0);
 
+    const initialPoint = drivingPolyline[0] || userCoord;
+    const secondPoint = drivingPolyline[1] || optimalSpot.coordinate;
+    const initialBearing = calculateBearing(initialPoint, secondPoint);
+
+    // Initial 3D driver cockpit view
     mapRef.current?.animateCamera(
       {
-        center: userCoord,
-        pitch: 55,
-        heading: 25,
-        altitude: 400,
-        zoom: 18,
+        center: initialPoint,
+        pitch: 60,
+        heading: initialBearing,
+        altitude: 300,
+        zoom: 18.5,
       },
-      { duration: 1000 }
+      { duration: 800 }
     );
 
     if (simIntervalId) clearInterval(simIntervalId);
@@ -290,17 +324,25 @@ export default function MapScreen() {
     let currentIdx = 0;
 
     const interval = setInterval(() => {
+      const prevIdx = currentIdx;
       currentIdx += stride;
+
       if (currentIdx < totalPoints) {
         setSimStep((prev) => prev + 1);
+        const prevPoint = drivingPolyline[prevIdx];
         const nextPoint = drivingPolyline[currentIdx];
+        const bearing = calculateBearing(prevPoint, nextPoint);
+
         setVehiclePosition(nextPoint);
+
+        // Keep camera locked in 3D driver cockpit view - altitude: 300 ensures iOS never zooms out!
         mapRef.current?.animateCamera(
           {
             center: nextPoint,
-            pitch: 55,
-            heading: 25,
-            zoom: 17.5,
+            pitch: 60,
+            heading: bearing,
+            altitude: 300,
+            zoom: 18.5,
           },
           { duration: 1200 }
         );
@@ -308,6 +350,16 @@ export default function MapScreen() {
         clearInterval(interval);
         setNavPhase('walking');
         setVehiclePosition(optimalSpot.coordinate);
+        mapRef.current?.animateCamera(
+          {
+            center: optimalSpot.coordinate,
+            pitch: 45,
+            heading: 0,
+            altitude: 250,
+            zoom: 18,
+          },
+          { duration: 800 }
+        );
         Alert.alert(
           '🅿️ Arrived at Free Parking!',
           `You have reached ${optimalSpot.title}.\nNow walking ${optimalSpot.distanceToDestMeters}m to ${destination.name}.`
@@ -326,12 +378,13 @@ export default function MapScreen() {
     setVehiclePosition(userCoord);
 
     mapRef.current?.animateCamera(
-      { center: userCoord, pitch: 0, heading: 0, zoom: 15 },
+      { center: userCoord, pitch: 0, heading: 0, altitude: 1200, zoom: 16 },
       { duration: 800 }
     );
   };
 
   const handleClearDestination = () => {
+    hasFittedRouteForDest.current = null;
     setDestination(null);
     setOptimalSpot(null);
     setSelectedSpot(null);
@@ -342,14 +395,9 @@ export default function MapScreen() {
     setIsNavigating(false);
     if (simIntervalId) clearInterval(simIntervalId);
 
-    mapRef.current?.animateToRegion(
-      {
-        latitude: userCoord.latitude,
-        longitude: userCoord.longitude,
-        latitudeDelta: 0.012,
-        longitudeDelta: 0.012,
-      },
-      600
+    mapRef.current?.animateCamera(
+      { center: userCoord, pitch: 0, heading: 0, altitude: 1200, zoom: 15 },
+      { duration: 600 }
     );
   };
 
