@@ -68,6 +68,11 @@ export const NavigationHUD: React.FC<NavigationHUDProps> = ({
                   : '📸'}
               </Text>
             </View>
+            {cameraWarning.camera.type === 'mobile' && (
+              <View style={[styles.cameraAlertIconBubble, cameraWarning.isUrgent && styles.cameraAlertIconBubbleUrgent]}>
+                <Text style={styles.cameraAlertEmoji}>🚓</Text>
+              </View>
+            )}
             <View style={styles.cameraAlertTextCol}>
               <View style={styles.cameraAlertTopRow}>
                 <Text style={styles.cameraAlertBadge}>
@@ -75,9 +80,11 @@ export const NavigationHUD: React.FC<NavigationHUDProps> = ({
                     ? 'TRAJECTCONTROLE'
                     : cameraWarning.camera.type === 'mobile'
                     ? 'MOBIELE FLITSER'
+                    ? 'POLITIECONTROLE'
                     : cameraWarning.camera.type === 'red_light'
                     ? 'FLITS- & ROODLICHT'
                     : 'FLITSER GEMELD'}
+                    : 'FLITSER'}
                 </Text>
                 <Text style={styles.cameraAlertDistance}>
                   {cameraWarning.distanceMeters > 1000
@@ -153,6 +160,9 @@ export const NavigationHUD: React.FC<NavigationHUDProps> = ({
         ) : cameraWarning ? (
           <View style={styles.radarAlertPill}>
             <Text style={styles.radarIcon}>📸</Text>
+            {cameraWarning.camera.type === 'mobile' && (
+              <Text style={styles.radarIcon}>🚓</Text>
+            )}
             <Text style={styles.radarAlertText}>{cameraWarning.distanceMeters}m</Text>
           </View>
         ) : (

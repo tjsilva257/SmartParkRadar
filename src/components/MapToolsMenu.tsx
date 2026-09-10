@@ -13,6 +13,7 @@ interface MapToolsMenuProps {
   onToggleScratchMap?: () => void;
   onCycleCameraDisplayMode?: () => void;
   onOpenHazardReport?: () => void;
+  onOpenMemeShake?: () => void;
   onRecenter: () => void;
   bottomOffset?: number;
 }
@@ -27,6 +28,7 @@ export const MapToolsMenu: React.FC<MapToolsMenuProps> = ({
   onToggleScratchMap,
   onCycleCameraDisplayMode,
   onOpenHazardReport,
+  onOpenMemeShake,
   onRecenter,
   bottomOffset = 40,
 }) => {
@@ -185,9 +187,13 @@ export const MapToolsMenu: React.FC<MapToolsMenuProps> = ({
             >
               <View style={[styles.iconBubble, { backgroundColor: '#fee2e2' }]}>
                 <Text style={styles.itemIcon}>📸</Text>
+                <View style={styles.miniCameraSpeedSign}>
+                  <Text style={styles.miniCameraSpeedSignText}>50</Text>
+                </View>
               </View>
               <View style={styles.textCol}>
                 <Text style={styles.itemTitle}>Camera Icons</Text>
+                <Text style={styles.itemTitle}>Flitspalen / Snelheid</Text>
                 <Text style={styles.itemSub}>
                   {cameraDisplayMode === 'always'
                     ? 'Always visible on road'
@@ -222,6 +228,29 @@ export const MapToolsMenu: React.FC<MapToolsMenuProps> = ({
                     ? 'ON TRIP'
                     : 'OFF'}
                 </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {/* Action 6: 6 & 7 Shake Meme */}
+          {onOpenMemeShake && (
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => {
+                setIsOpen(false);
+                onOpenMemeShake();
+              }}
+              style={styles.menuItem}
+            >
+              <View style={[styles.iconBubble, { backgroundColor: '#fdf4ff' }]}>
+                <Text style={styles.itemIcon}>🕺</Text>
+              </View>
+              <View style={styles.textCol}>
+                <Text style={styles.itemTitle}>6 & 7 Shake Meme</Text>
+                <Text style={styles.itemSub}>Of schud je scherm/telefoon!</Text>
+              </View>
+              <View style={[styles.badge, styles.badgeTrip]}>
+                <Text style={[styles.badgeText, styles.badgeTextTrip]}>MEME</Text>
               </View>
             </TouchableOpacity>
           )}
@@ -373,6 +402,21 @@ const styles = StyleSheet.create({
   },
   badgeTextOff: {
     color: '#64748b',
+  },
+  miniCameraSpeedSign: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#ffffff',
+    borderWidth: 2,
+    borderColor: '#dc2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  miniCameraSpeedSignText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#0f172a',
   },
 });
 

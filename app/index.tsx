@@ -25,6 +25,8 @@ import { PoiPreviewCard } from '../src/components/PoiPreviewCard';
 import { getFavorites, addFavorite, removeFavorite, isFavorite } from '../src/services/favoritesService';
 import { voiceGuidance } from '../src/services/voiceGuidanceService';
 import { ScratchMapOverlay } from '../src/components/ScratchMapOverlay';
+import { MemeShakeModal } from '../src/components/MemeShakeModal';
+import { useShakeDetector } from '../src/hooks/useShakeDetector';
 import {
   loadExploredGeometry,
   addExploredCoordinate,
@@ -104,6 +106,17 @@ export default function MapScreen() {
   // Places & POI State (Cafes, Restaurants, Apple Maps Points of Interest)
   const [selectedPoi, setSelectedPoi] = useState<DestinationTarget | null>(null);
   const [favoritesList, setFavoritesList] = useState<SavedLocation[]>([]);
+
+  // 6 & 7 Shaking Meme Easter Egg State
+  const [isMemeVisible, setIsMemeVisible] = useState(false);
+
+  // Screen shake detector: triggers the 6 & 7 shaking meme when phone is shaken
+  useShakeDetector({
+    onShake: () => {
+      setIsMemeVisible(true);
+    },
+    enabled: true,
+  });
 
   // Load active road hazards & favorites on mount
   useEffect(() => {
@@ -808,11 +821,13 @@ export default function MapScreen() {
                 onPress={() => {
                   Alert.alert(
                     `📸 ${cam.name}`,
+                    isMobile ? `🚓 ${cam.name}` : cam.name,
                     `${cam.road}\n\nType: ${
                       isTraject
                         ? 'Trajectcontrole'
                         : isMobile
                         ? 'Mobiele Controle'
+                        ? 'Politiecontrole'
                         : isRedLight
                         ? 'Roodlicht & Flitser'
                         : 'Vaste Flitspaal'
@@ -826,8 +841,21 @@ export default function MapScreen() {
                   </Text>
                   <View style={styles.cameraMarkerSign}>
                     <Text style={styles.cameraMarkerSignText}>{cam.speedLimit}</Text>
+                {isMobile ? (
+                  // Police inspection: KEEP the emoticon!
+                  <View style={styles.policeMarkerBubble}>
+                    <Text style={styles.policeMarkerEmoji}>🚓</Text>
+                    <View style={styles.cameraMarkerSign}>
+                      <Text style={styles.cameraMarkerSignText}>{cam.speedLimit}</Text>
+                    </View>
                   </View>
                 </View>
+                ) : (
+                  // Regular speed camera / trajectcontrole: REMOVE emoticon, show authentic European speed limit sign!
+                  <View style={styles.cameraSignOnlyBubble}>
+                    <Text style={styles.cameraSignOnlyText}>{cam.speedLimit}</Text>
+                  </View>
+                )}
               </Marker>
             );
           })}
@@ -837,6 +865,7 @@ export default function MapScreen() {
           const emoji =
             h.category === 'mobile_camera'
               ? '📸'
+              ? '🚓'
               : h.category === 'parking_warden'
               ? '👮'
               : h.category === 'accident'
@@ -906,6 +935,13 @@ export default function MapScreen() {
           <Text style={styles.floatingRadarEmoji}>
             {cameraWarning.camera.type === 'traject' ? '⏱️' : cameraWarning.camera.type === 'mobile' ? '🚓' : '📸'}
           </Text>
+          {cameraWarning.camera.type === 'mobile' ? (
+            <Text style={styles.floatingRadarEmoji}>🚓</Text>
+          ) : (
+            <View style={styles.floatingRadarSign}>
+              <Text style={styles.floatingRadarSignText}>{cameraWarning.camera.speedLimit}</Text>
+            </View>
+          )}
           <Text style={styles.floatingRadarText} numberOfLines={1}>
             {cameraWarning.camera.name} ({cameraWarning.distanceMeters}m) • Max {cameraWarning.camera.speedLimit} km/h
           </Text>
@@ -923,6 +959,7 @@ export default function MapScreen() {
         onToggleScratchMap={() => setShowScratchMap((p) => !p)}
         onCycleCameraDisplayMode={handleCycleCameraDisplayMode}
         onOpenHazardReport={() => setIsHazardModalVisible(true)}
+        onOpenMemeShake={() => setIsMemeVisible(true)}
         onRecenter={handleRecenter}
         bottomOffset={isNavigating ? 140 : destination ? 260 : selectedPoi ? 190 : 100}
       />
@@ -965,6 +1002,12 @@ export default function MapScreen() {
         userLocation={userCoord}
         onClose={() => setIsHazardModalVisible(false)}
         onSubmitHazard={handleSubmitHazard}
+      />
+
+      {/* 7. EASTER EGG: 6 & 7 SHAKING MEME MODAL (Triggered by shaking the screen) */}
+      <MemeShakeModal
+        visible={isMemeVisible}
+        onClose={() => setIsMemeVisible(false)}
       />
     </View>
   );
@@ -1081,6 +1124,61 @@ const styles = StyleSheet.create({
     fontSize: 8,
     fontWeight: '900',
     color: '#000000',
+  },
+  policeMarkerBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1e3a8a',
+    borderWidth: 2,
+    borderColor: '#3b82f6',
+    borderRadius: 14,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    shadowColor: '#1d4ed8',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.45,
+    shadowRadius: 5,
+    elevation: 7,
+  },
+  policeMarkerEmoji: {
+    fontSize: 14,
+    marginRight: 4,
+  },
+  cameraSignOnlyBubble: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 3,
+    borderColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    elevation: 6,
+  },
+  cameraSignOnlyText: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#0f172a',
+  },
+  floatingRadarSign: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#ffffff',
+    borderWidth: 2,
+    borderColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  floatingRadarSignText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#0f172a',
   },
   floatingRadarPill: {
     position: 'absolute',

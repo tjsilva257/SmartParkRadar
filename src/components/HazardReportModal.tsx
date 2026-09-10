@@ -43,6 +43,7 @@ const CATEGORIES: {
   sub: string;
 }[] = [
   { category: 'mobile_camera', emoji: '📸', label: 'Mobiele Flitser', sub: 'Laser / Politiecontrole' },
+  { category: 'mobile_camera', emoji: '🚓', label: 'Politiecontrole / Laser', sub: 'Mobiele inspectie / Flitser' },
   { category: 'parking_warden', emoji: '👮', label: 'Handhaving', sub: 'Scan-auto / Parkeerwachter' },
   { category: 'accident', emoji: '🚗', label: 'Ongeval / Pech', sub: 'Stilstaand voertuig op rijbaan' },
   { category: 'road_work', emoji: '🚧', label: 'Werkzaamheden', sub: 'Wegafsluiting / Pionnen' },
