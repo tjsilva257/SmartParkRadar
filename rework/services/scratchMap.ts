@@ -4,7 +4,7 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import type { Feature, MultiPolygon, Polygon, Position } from 'geojson';
 import type { Coordinate, ExploredGeometry } from '../types';
-import { KEYS, load, save } from '../lib/store';
+import { KEYS, loadStrict, save } from '../lib/store';
 
 const TASK = 'SCRATCH_MAP_BACKGROUND_TASK';
 const RADIUS_KM = 0.12;
@@ -41,7 +41,8 @@ function parseGeometry(raw: any): ExploredGeometry {
 
 export async function loadExplored(): Promise<ExploredGeometry> {
   if (!loaded) {
-    current = parseGeometry(await load<unknown>(KEYS.scratchMap, null));
+    // A failed read throws and leaves `loaded` false, so the next add retries instead of saving one circle over the map.
+    current = parseGeometry(await loadStrict<unknown>(KEYS.scratchMap));
     loaded = true;
   }
   return current;

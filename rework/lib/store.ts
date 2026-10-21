@@ -13,18 +13,9 @@ export const KEYS = {
   mapSettings: '@smartpark_map_settings_v2',
 } as const;
 
-export async function load<T>(key: string, fallback: T): Promise<T> {
-  try {
-    const raw = await AsyncStorage.getItem(key);
-    return raw == null ? fallback : (JSON.parse(raw) as T);
-  } catch {
-    return fallback;
-  }
-}
-
 /**
- * Like load(), but tells a missing/corrupt entry (undefined) apart from a failed
- * read (throws), so callers that seed defaults don't overwrite data they couldn't read.
+ * Tells a missing/corrupt entry (undefined) apart from a failed read (throws),
+ * so callers that seed defaults don't overwrite data they couldn't read.
  */
 export async function loadStrict<T>(key: string): Promise<T | undefined> {
   const raw = await AsyncStorage.getItem(key);

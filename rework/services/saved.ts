@@ -11,7 +11,7 @@ import type {
   SavedState,
 } from '../types';
 import { DEFAULT_ICON_FILTERS, DEFAULT_MAP_SETTINGS } from '../types';
-import { KEYS, load, save } from '../lib/store';
+import { KEYS, loadStrict, save } from '../lib/store';
 
 const POI_CATEGORIES: PoiCategory[] = [
   'cafe', 'restaurant', 'bakery', 'bar', 'parking', 'transit', 'museum', 'park', 'shopping', 'home', 'work', 'generic',
@@ -74,12 +74,13 @@ function asSlot(raw: unknown, slot: 'home' | 'work'): SavedPlace | null {
   return p && { ...p, id: SLOT[slot].id, category: slot, customLabel: SLOT[slot].label, poiCategory: slot };
 }
 
+/** Throws when storage can't be read, so callers never mistake that for "nothing saved". */
 export async function loadSaved(): Promise<SavedState> {
   const [home, work, favorites, recents] = await Promise.all([
-    load<unknown>(KEYS.home, null),
-    load<unknown>(KEYS.work, null),
-    load<unknown>(KEYS.favorites, []),
-    load<unknown>(KEYS.recents, []),
+    loadStrict<unknown>(KEYS.home),
+    loadStrict<unknown>(KEYS.work),
+    loadStrict<unknown>(KEYS.favorites),
+    loadStrict<unknown>(KEYS.recents),
   ]);
   return {
     home: asSlot(home, 'home'),
@@ -137,7 +138,7 @@ export async function clearRecents(): Promise<void> {
 }
 
 export async function loadIconFilters(): Promise<MapIconFilters> {
-  const raw = await load<unknown>(KEYS.iconFilters, null);
+  const raw = await loadStrict<unknown>(KEYS.iconFilters);
   const stored = isRecord(raw) ? raw : {};
   const filters = { ...DEFAULT_ICON_FILTERS };
   for (const key of Object.keys(filters) as (keyof MapIconFilters)[]) {
@@ -152,7 +153,7 @@ export async function saveIconFilters(f: MapIconFilters): Promise<void> {
 }
 
 export async function loadMapSettings(): Promise<MapSettings> {
-  const raw = await load<unknown>(KEYS.mapSettings, null);
+  const raw = await loadStrict<unknown>(KEYS.mapSettings);
   const s = isRecord(raw) ? raw : {};
   const d = DEFAULT_MAP_SETTINGS;
   const bool = (v: unknown, fallback: boolean) => (typeof v === 'boolean' ? v : fallback);

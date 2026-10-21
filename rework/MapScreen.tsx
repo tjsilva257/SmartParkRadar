@@ -343,6 +343,8 @@ export default function MapScreen(): React.JSX.Element {
   modeRef.current = mode;
   const savedRef = useRef(saved);
   savedRef.current = saved;
+  // Until the stored lists are read, a favorite/recent write would replace them with this session's empty ones.
+  const savedLoaded = useRef(false);
   const centeredRef = useRef(centered);
   centeredRef.current = centered;
   const sheetHeightRef = useRef(sheetHeight);
@@ -374,6 +376,7 @@ export default function MapScreen(): React.JSX.Element {
     let alive = true;
     loadSaved()
       .then((s) => {
+        savedLoaded.current = true;
         if (alive) setSaved(s);
       })
       .catch(() => undefined);
@@ -383,16 +386,15 @@ export default function MapScreen(): React.JSX.Element {
         if (alive) setExplored((prev) => prev ?? g);
       })
       .catch(() => undefined);
+    // A failed read leaves prefsLoaded false: this session keeps the defaults without saving them over stored ones.
     Promise.all([loadIconFilters(), loadMapSettings()])
       .then(([f, s]) => {
         if (!alive) return;
         setFilters(f);
         setSettings(s);
+        setPrefsLoaded(true);
       })
-      .catch(() => undefined)
-      .finally(() => {
-        if (alive) setPrefsLoaded(true);
-      });
+      .catch(() => undefined);
     return () => {
       alive = false;
     };
@@ -558,6 +560,7 @@ export default function MapScreen(): React.JSX.Element {
   // ---------- Places ----------
 
   const rememberRecent = (place: Place) => {
+    if (!savedLoaded.current) return;
     addRecent(place, savedRef.current.recents)
       .then((recents) => {
         if (mounted.current) setSaved((s) => ({ ...s, recents }));
@@ -624,6 +627,7 @@ export default function MapScreen(): React.JSX.Element {
   };
 
   const handleToggleFavorite = (place: Place) => {
+    if (!savedLoaded.current) return;
     toggleFavorite(place, savedRef.current.favorites)
       .then((favorites) => {
         if (mounted.current) setSaved((s) => ({ ...s, favorites }));
