@@ -341,10 +341,6 @@ export default function MapScreen(): React.JSX.Element {
   // Handlers and async callbacks read these so they never act on a stale render.
   const modeRef = useRef(mode);
   modeRef.current = mode;
-  const savedRef = useRef(saved);
-  savedRef.current = saved;
-  // Until the stored lists are read, a favorite/recent write would replace them with this session's empty ones.
-  const savedLoaded = useRef(false);
   const centeredRef = useRef(centered);
   centeredRef.current = centered;
   const sheetHeightRef = useRef(sheetHeight);
@@ -376,7 +372,6 @@ export default function MapScreen(): React.JSX.Element {
     let alive = true;
     loadSaved()
       .then((s) => {
-        savedLoaded.current = true;
         if (alive) setSaved(s);
       })
       .catch(() => undefined);
@@ -386,7 +381,6 @@ export default function MapScreen(): React.JSX.Element {
         if (alive) setExplored((prev) => prev ?? g);
       })
       .catch(() => undefined);
-    // A failed read leaves prefsLoaded false: this session keeps the defaults without saving them over stored ones.
     Promise.all([loadIconFilters(), loadMapSettings()])
       .then(([f, s]) => {
         if (!alive) return;
@@ -400,14 +394,16 @@ export default function MapScreen(): React.JSX.Element {
     };
   }, []);
 
-  // Persist only after loading, so the defaults never overwrite stored preferences.
-  useEffect(() => {
-    if (prefsLoaded) saveIconFilters(filters);
-  }, [filters, prefsLoaded]);
+  // Saves only what the user changed, so stored preferences are never replaced wholesale.
+  const changeFilters = (next: MapIconFilters) => {
+    setFilters(next);
+    saveIconFilters(filters, next).catch(() => undefined);
+  };
 
-  useEffect(() => {
-    if (prefsLoaded) saveMapSettings(settings);
-  }, [settings, prefsLoaded]);
+  const changeSettings = (next: MapSettings) => {
+    setSettings(next);
+    saveMapSettings(settings, next).catch(() => undefined);
+  };
 
   useEffect(() => {
     voice.setMuted(settings.voiceMuted);
@@ -560,8 +556,7 @@ export default function MapScreen(): React.JSX.Element {
   // ---------- Places ----------
 
   const rememberRecent = (place: Place) => {
-    if (!savedLoaded.current) return;
-    addRecent(place, savedRef.current.recents)
+    addRecent(place)
       .then((recents) => {
         if (mounted.current) setSaved((s) => ({ ...s, recents }));
       })
@@ -627,8 +622,7 @@ export default function MapScreen(): React.JSX.Element {
   };
 
   const handleToggleFavorite = (place: Place) => {
-    if (!savedLoaded.current) return;
-    toggleFavorite(place, savedRef.current.favorites)
+    toggleFavorite(place)
       .then((favorites) => {
         if (mounted.current) setSaved((s) => ({ ...s, favorites }));
       })
@@ -915,7 +909,7 @@ export default function MapScreen(): React.JSX.Element {
           destination={destination}
           parking={parking}
           voiceMuted={settings.voiceMuted}
-          onToggleVoice={() => setSettings((s) => ({ ...s, voiceMuted: !s.voiceMuted }))}
+          onToggleVoice={() => changeSettings({ ...settings, voiceMuted: !settings.voiceMuted })}
           onEnd={endTrip}
           onReport={() => setOverlay('report')}
           onCycleSpeedTest={cycleSpeedTest}
@@ -926,9 +920,9 @@ export default function MapScreen(): React.JSX.Element {
         visible={overlay === 'settings'}
         onClose={() => setOverlay(null)}
         settings={settings}
-        onChangeSettings={setSettings}
+        onChangeSettings={changeSettings}
         filters={filters}
-        onChangeFilters={setFilters}
+        onChangeFilters={changeFilters}
         live={{
           active: live.active,
           refreshing: live.refreshing,

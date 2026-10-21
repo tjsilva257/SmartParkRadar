@@ -4,21 +4,10 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import type { Feature, MultiPolygon, Polygon, Position } from 'geojson';
 import type { Coordinate, ExploredGeometry } from '../types';
-import { KEYS, loadStrict, save } from '../lib/store';
+import { KEYS, persisted } from '../lib/store';
 
 const TASK = 'SCRATCH_MAP_BACKGROUND_TASK';
 const RADIUS_KM = 0.12;
-
-let current: ExploredGeometry = null;
-let loaded = false;
-
-// Every read-modify-write goes through this chain so rapid location fixes can't race the union.
-let chain: Promise<unknown> = Promise.resolve();
-function serial<T>(fn: () => Promise<T>): Promise<T> {
-  const run = chain.then(fn);
-  chain = run.catch(() => undefined);
-  return run;
-}
 
 const isRing = (r: unknown): r is Position[] =>
   Array.isArray(r) && r.length >= 4 && r.every((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]));
@@ -39,17 +28,14 @@ function parseGeometry(raw: any): ExploredGeometry {
   return null;
 }
 
-export async function loadExplored(): Promise<ExploredGeometry> {
-  if (!loaded) {
-    // A failed read throws and leaves `loaded` false, so the next add retries instead of saving one circle over the map.
-    current = parseGeometry(await loadStrict<unknown>(KEYS.scratchMap));
-    loaded = true;
-  }
-  return current;
+// Updates run one at a time, so rapid location fixes can't race the union.
+const explored = persisted<ExploredGeometry>(KEYS.scratchMap, parseGeometry);
+
+export function loadExplored(): Promise<ExploredGeometry> {
+  return explored.read();
 }
 
-async function addNow({ latitude, longitude }: Coordinate): Promise<ExploredGeometry> {
-  const prev = await loadExplored();
+function withCircle(prev: ExploredGeometry, { latitude, longitude }: Coordinate): ExploredGeometry {
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return prev;
   const point = turf.point([longitude, latitude]);
   // Fast path: most fixes land inside an area that is already revealed.
@@ -72,22 +58,16 @@ async function addNow({ latitude, longitude }: Coordinate): Promise<ExploredGeom
       return prev;
     }
   }
-  current = next;
-  await save(KEYS.scratchMap, next);
   return next;
 }
 
 /** Reveals a 120 m circle around `c`. Returns the same object when nothing changed. */
 export function addExplored(c: Coordinate): Promise<ExploredGeometry> {
-  return serial(() => addNow(c));
+  return explored.update((prev) => withCircle(prev, c));
 }
 
-export function clearExplored(): Promise<void> {
-  return serial(async () => {
-    current = null;
-    loaded = true;
-    await save(KEYS.scratchMap, null);
-  });
+export async function clearExplored(): Promise<void> {
+  await explored.update(() => null);
 }
 
 /** Outer rings of the explored area, as holes for the world-mask fog polygon. */

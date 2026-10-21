@@ -11,7 +11,7 @@ import type {
   SavedState,
 } from '../types';
 import { DEFAULT_ICON_FILTERS, DEFAULT_MAP_SETTINGS } from '../types';
-import { KEYS, loadStrict, save } from '../lib/store';
+import { KEYS, persisted } from '../lib/store';
 
 const POI_CATEGORIES: PoiCategory[] = [
   'cafe', 'restaurant', 'bakery', 'bar', 'parking', 'transit', 'museum', 'park', 'shopping', 'home', 'work', 'generic',
@@ -65,8 +65,8 @@ function parseList(raw: unknown, category: SavedCategory): SavedPlace[] {
 }
 
 const SLOT = {
-  home: { key: KEYS.home, id: 'home_location', label: 'Home' },
-  work: { key: KEYS.work, id: 'work_location', label: 'Work' },
+  home: { id: 'home_location', label: 'Home' },
+  work: { id: 'work_location', label: 'Work' },
 } as const;
 
 function asSlot(raw: unknown, slot: 'home' | 'work'): SavedPlace | null {
@@ -74,38 +74,37 @@ function asSlot(raw: unknown, slot: 'home' | 'work'): SavedPlace | null {
   return p && { ...p, id: SLOT[slot].id, category: slot, customLabel: SLOT[slot].label, poiCategory: slot };
 }
 
-/** Throws when storage can't be read, so callers never mistake that for "nothing saved". */
+const stored = {
+  home: persisted(KEYS.home, (raw) => asSlot(raw, 'home')),
+  work: persisted(KEYS.work, (raw) => asSlot(raw, 'work')),
+  favorites: persisted(KEYS.favorites, (raw) => parseList(raw, 'favorite')),
+  recents: persisted(KEYS.recents, (raw) => parseList(raw, 'recent')),
+};
+
 export async function loadSaved(): Promise<SavedState> {
   const [home, work, favorites, recents] = await Promise.all([
-    loadStrict<unknown>(KEYS.home),
-    loadStrict<unknown>(KEYS.work),
-    loadStrict<unknown>(KEYS.favorites),
-    loadStrict<unknown>(KEYS.recents),
+    stored.home.read(),
+    stored.work.read(),
+    stored.favorites.read(),
+    stored.recents.read(),
   ]);
-  return {
-    home: asSlot(home, 'home'),
-    work: asSlot(work, 'work'),
-    favorites: parseList(favorites, 'favorite'),
-    recents: parseList(recents, 'recent'),
-  };
+  return { home, work, favorites, recents };
 }
 
 /** Sets (or with null, removes) Home/Work. */
-export async function setSavedSlot(slot: 'home' | 'work', place: Place | null): Promise<SavedPlace | null> {
-  if (!place) {
-    await save(SLOT[slot].key, null);
-    return null;
-  }
-  const saved: SavedPlace = {
-    ...toPlace(place),
-    id: SLOT[slot].id,
-    category: slot,
-    customLabel: SLOT[slot].label,
-    poiCategory: slot,
-    savedAt: Date.now(),
-  };
-  await save(SLOT[slot].key, saved);
-  return saved;
+export function setSavedSlot(slot: 'home' | 'work', place: Place | null): Promise<SavedPlace | null> {
+  return stored[slot].update(() =>
+    place
+      ? {
+          ...toPlace(place),
+          id: SLOT[slot].id,
+          category: slot,
+          customLabel: SLOT[slot].label,
+          poiCategory: slot,
+          savedAt: Date.now(),
+        }
+      : null
+  );
 }
 
 const near = (a: Place, b: Place, deg: number) =>
@@ -117,28 +116,32 @@ export function isFavorite(place: Place, favorites: SavedPlace[]): boolean {
 }
 
 /** Adds the place (newest first) or removes it if it's already a favorite. Returns the new list. */
-export async function toggleFavorite(place: Place, favorites: SavedPlace[]): Promise<SavedPlace[]> {
-  const updated = isFavorite(place, favorites)
-    ? favorites.filter((f) => f.id !== place.id && !near(f, place, 0.0001))
-    : [{ ...toPlace(place), category: 'favorite' as const, customLabel: place.name, savedAt: Date.now() }, ...favorites];
-  await save(KEYS.favorites, updated);
-  return updated;
+export function toggleFavorite(place: Place): Promise<SavedPlace[]> {
+  return stored.favorites.update((favorites) =>
+    isFavorite(place, favorites)
+      ? favorites.filter((f) => f.id !== place.id && !near(f, place, 0.0001))
+      : [{ ...toPlace(place), category: 'favorite' as const, customLabel: place.name, savedAt: Date.now() }, ...favorites]
+  );
 }
 
 /** Moves the place to the top of recents, replacing entries with the same name or nearly the same spot. */
-export async function addRecent(place: Place, recents: SavedPlace[]): Promise<SavedPlace[]> {
+export function addRecent(place: Place): Promise<SavedPlace[]> {
   const item: SavedPlace = { ...toPlace(place), category: 'recent', savedAt: Date.now() };
-  const updated = [item, ...recents.filter((r) => r.name !== place.name && !near(r, place, 0.0005))].slice(0, 15);
-  await save(KEYS.recents, updated);
-  return updated;
+  return stored.recents.update((recents) =>
+    [item, ...recents.filter((r) => r.name !== place.name && !near(r, place, 0.0005))].slice(0, 15)
+  );
 }
 
 export async function clearRecents(): Promise<void> {
-  await save(KEYS.recents, null);
+  await stored.recents.update(() => []);
 }
 
-export async function loadIconFilters(): Promise<MapIconFilters> {
-  const raw = await loadStrict<unknown>(KEYS.iconFilters);
+/** The fields of `next` that differ from `prev`: saving only those patches what's stored instead of replacing it. */
+function changedFields<T extends object>(prev: T, next: T): Partial<T> {
+  return Object.fromEntries(Object.entries(next).filter(([k, v]) => prev[k as keyof T] !== v)) as Partial<T>;
+}
+
+function parseIconFilters(raw: unknown): MapIconFilters {
   const stored = isRecord(raw) ? raw : {};
   const filters = { ...DEFAULT_ICON_FILTERS };
   for (const key of Object.keys(filters) as (keyof MapIconFilters)[]) {
@@ -148,12 +151,19 @@ export async function loadIconFilters(): Promise<MapIconFilters> {
   return filters;
 }
 
-export async function saveIconFilters(f: MapIconFilters): Promise<void> {
-  await save(KEYS.iconFilters, f);
+const iconFilters = persisted(KEYS.iconFilters, parseIconFilters);
+
+export function loadIconFilters(): Promise<MapIconFilters> {
+  return iconFilters.read();
 }
 
-export async function loadMapSettings(): Promise<MapSettings> {
-  const raw = await loadStrict<unknown>(KEYS.mapSettings);
+/** Saves what changed from `prev` to `next`. */
+export async function saveIconFilters(prev: MapIconFilters, next: MapIconFilters): Promise<void> {
+  const change = changedFields(prev, next);
+  await iconFilters.update((f) => ({ ...f, ...change }));
+}
+
+function parseMapSettings(raw: unknown): MapSettings {
   const s = isRecord(raw) ? raw : {};
   const d = DEFAULT_MAP_SETTINGS;
   const bool = (v: unknown, fallback: boolean) => (typeof v === 'boolean' ? v : fallback);
@@ -168,6 +178,14 @@ export async function loadMapSettings(): Promise<MapSettings> {
   };
 }
 
-export async function saveMapSettings(s: MapSettings): Promise<void> {
-  await save(KEYS.mapSettings, s);
+const mapSettings = persisted(KEYS.mapSettings, parseMapSettings);
+
+export function loadMapSettings(): Promise<MapSettings> {
+  return mapSettings.read();
+}
+
+/** Saves what changed from `prev` to `next`. */
+export async function saveMapSettings(prev: MapSettings, next: MapSettings): Promise<void> {
+  const change = changedFields(prev, next);
+  await mapSettings.update((s) => ({ ...s, ...change }));
 }

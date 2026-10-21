@@ -10,7 +10,7 @@ import type {
 import { HAZARD_CATEGORIES, hazardGlyph } from '../components/glyphs';
 import { bbox } from '../lib/geo';
 import { overpass, overpassBox } from '../lib/http';
-import { KEYS, loadStrict, save } from '../lib/store';
+import { KEYS, persisted } from '../lib/store';
 import { highwayName, interpolateHectometer } from './hectometer';
 
 const MIN = 60 * 1000;
@@ -115,34 +115,14 @@ function parseHazard(raw: any): RoadHazard | null {
     : hazard;
 }
 
-const parseList = (raw: unknown[]) => raw.map(parseHazard).filter((h): h is RoadHazard => h !== null);
+const stored = persisted(KEYS.hazards, (raw) =>
+  Array.isArray(raw) ? raw.map(parseHazard).filter((h): h is RoadHazard => h !== null) : SEED_HAZARDS
+);
 
 /** Stored community + user hazards. The first run seeds and persists SEED_HAZARDS. */
-export async function loadHazards(): Promise<RoadHazard[]> {
-  let raw: unknown;
-  try {
-    raw = await loadStrict<unknown>(KEYS.hazards);
-  } catch {
-    // Storage unreadable right now: show the seeds but don't overwrite what's stored.
-    return SEED_HAZARDS;
-  }
-  if (!Array.isArray(raw)) {
-    await save(KEYS.hazards, SEED_HAZARDS);
-    return SEED_HAZARDS;
-  }
-  return parseList(raw);
-}
-
-// Read-modify-write of the stored list is serialized so a confirm and a report can't overwrite each other.
-let writes: Promise<unknown> = Promise.resolve();
-function updateStored(fn: (list: RoadHazard[]) => RoadHazard[]): Promise<void> {
-  const run = writes.then(async () => {
-    // A failed read throws here, so nothing gets written over the stored reports.
-    const raw = await loadStrict<unknown>(KEYS.hazards);
-    await save(KEYS.hazards, fn(Array.isArray(raw) ? parseList(raw) : SEED_HAZARDS));
-  });
-  writes = run.catch(() => undefined);
-  return run;
+export function loadHazards(): Promise<RoadHazard[]> {
+  // Persisting a copy of the seeds fixes their ages from this first run; a stored list comes back as is, unwritten.
+  return stored.update((list) => (list === SEED_HAZARDS ? [...SEED_HAZARDS] : list));
 }
 
 /** Live roadworks and road closures around `center` from OpenStreetMap (empty when offline). */
@@ -200,14 +180,14 @@ export async function reportHazard(report: NewHazardReport): Promise<RoadHazard>
     confirmations: 1,
     note: report.note?.trim() || undefined,
   };
-  await updateStored((list) => [hazard, ...list]);
+  await stored.update((list) => [hazard, ...list]);
   return hazard;
 }
 
 /** +1 on a stored hazard. Live OSM hazards aren't stored, so confirming them is a no-op here. */
 export async function confirmHazard(id: string): Promise<void> {
   if (!id || id.startsWith('osm-')) return;
-  await updateStored((list) => list.map((h) => (h.id === id ? { ...h, confirmations: h.confirmations + 1 } : h)));
+  await stored.update((list) => list.map((h) => (h.id === id ? { ...h, confirmations: h.confirmations + 1 } : h)));
 }
 
 export function isLocalHazard(h: RoadHazard): boolean {

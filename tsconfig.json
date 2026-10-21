@@ -3,5 +3,9 @@
     "strict": true,
     "jsx": "react-jsx"
   },
-  "extends": "expo/tsconfig.base"
+  "extends": "expo/tsconfig.base",
+  // Repeats the base excludes (exclude replaces, not merges) and adds tests: they run on Node via
+  // `npm test` and would need Node's types, which the app must not see.
+  // ponytail: tests aren't typechecked; add a tsconfig.test.json with "types": ["node"] if that starts to bite.
+  "exclude": ["node_modules", "babel.config.js", "metro.config.js", "jest.config.js", "android", "ios", "**/*.test.ts"]
 }
