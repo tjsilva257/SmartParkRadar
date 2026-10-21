@@ -1,6 +1,6 @@
 // Car routes (OSRM demo server, with alternatives and turn-by-turn steps) and the walking leg
 // (FOSSGIS foot router). Both fall back to a plausible estimate when offline.
-import type { Coordinate, Maneuver, ManeuverKind, RouteOption } from '../types';
+import type { Coordinate, Maneuver, ManeuverKind, RouteOption, WalkRoute } from '../types';
 import { bearing, distanceMeters, fallbackPath } from '../lib/geo';
 import { fetchJson } from '../lib/http';
 
@@ -230,10 +230,7 @@ export async function fetchDriveRoutes(start: Coordinate, end: Coordinate): Prom
   return parsed.map((r, i) => ({ ...r, isFastest: i === 0, delaySeconds: r.durationSeconds - fastest }));
 }
 
-export async function fetchWalkRoute(
-  start: Coordinate,
-  end: Coordinate
-): Promise<{ coordinates: Coordinate[]; distanceMeters: number; durationSeconds: number }> {
+export async function fetchWalkRoute(start: Coordinate, end: Coordinate): Promise<WalkRoute> {
   // The OSRM demo server only serves the car profile; FOSSGIS runs a real foot profile.
   const url =
     `https://routing.openstreetmap.de/routed-foot/route/v1/foot/${start.longitude},${start.latitude};${end.longitude},${end.latitude}` +

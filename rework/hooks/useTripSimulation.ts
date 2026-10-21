@@ -32,7 +32,6 @@ const THEN_WITHIN_METERS = 400;
 type Phase = TravelPhase | 'arrived';
 
 interface Options {
-  route: RouteOption | null;
   walkPath: Coordinate[];
   parking: ParkingSpot | null;
   destination: Place | null;
@@ -182,20 +181,23 @@ function announceDriving(t: TripState): void {
 
 export function useTripSimulation(opts: Options): {
   trip: TripState | null;
-  start: () => void;
+  start: (route: RouteOption) => void;
   stop: () => void;
   cycleSpeedTest: () => void;
 } {
   const [trip, setTrip] = useState<TripState | null>(null);
-  // Bumping runId (re)starts the simulation in an effect, after the render that
-  // carries props set in the same handler as start() (e.g. selecting the route on GO).
-  const [runId, setRunId] = useState(0);
-  const runCounter = useRef(0);
-  const running = useRef(false);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const optsRef = useRef(opts);
   optsRef.current = opts;
   const simRef = useRef<Sim | null>(null);
   const speedTestRef = useRef(-1);
+
+  const halt = useCallback(() => {
+    if (timer.current) clearInterval(timer.current);
+    timer.current = null;
+  }, []);
+
+  useEffect(() => halt, [halt]);
 
   const publish = useCallback((announce: boolean) => {
     const sim = simRef.current;
@@ -207,19 +209,12 @@ export function useTripSimulation(opts: Options): {
     setTrip(t);
   }, []);
 
-  useEffect(() => {
-    if (runId === 0) return;
+  const start = useCallback((route: RouteOption) => {
+    if (timer.current) return;
     const o = optsRef.current;
-    const route = o.route;
-    const drivePoints = route
-      ? route.coordinates.length > 0
-        ? route.coordinates
-        : [o.parking?.coordinate ?? o.destination?.coordinate].filter(isCoord)
-      : [];
-    if (!route || drivePoints.length === 0) {
-      running.current = false;
-      return;
-    }
+    const drivePoints =
+      route.coordinates.length > 0 ? route.coordinates : [o.parking?.coordinate ?? o.destination?.coordinate].filter(isCoord);
+    if (drivePoints.length === 0) return;
 
     const drive = line(drivePoints);
     // Step distances don't add up to the drawn path (the fallback route's 1.3x estimate, OSRM rounding):
@@ -238,7 +233,7 @@ export function useTripSimulation(opts: Options): {
     publish(true);
     o.onPhaseChange?.('driving');
 
-    const id = setInterval(() => {
+    timer.current = setInterval(() => {
       const sim = simRef.current;
       if (!sim || sim.phase === 'arrived') return;
       const now = optsRef.current;
@@ -257,32 +252,21 @@ export function useTripSimulation(opts: Options): {
         sim.phase = 'arrived';
         sim.traveled = sim.walk.total;
         changed = 'arrived';
-        clearInterval(id);
-        running.current = false;
+        halt();
         voice.say(`You've arrived at ${destinationName(now)}.`);
       }
 
       publish(changed === null);
       if (changed) now.onPhaseChange?.(changed);
     }, TICK_MS);
-
-    return () => clearInterval(id);
-  }, [runId, publish]);
-
-  const start = useCallback(() => {
-    if (running.current) return;
-    running.current = true;
-    runCounter.current += 1;
-    setRunId(runCounter.current);
-  }, []);
+  }, [halt, publish]);
 
   const stop = useCallback(() => {
-    running.current = false;
-    simRef.current = null; // a tick that slips in before the effect cleanup becomes a no-op
+    halt();
+    simRef.current = null;
     voice.reset();
-    setRunId(0);
     setTrip(null);
-  }, []);
+  }, [halt]);
 
   const cycleSpeedTest = useCallback(() => {
     const i = speedTestRef.current;

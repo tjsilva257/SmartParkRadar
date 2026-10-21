@@ -29,3 +29,21 @@ _Avoid_: walk limit, walking radius
 **Parking scan**:
 The parking spots around a destination, the best one for the max walk, and a hint when free parking lies just beyond it.
 _Avoid_: parking result, parking search
+
+### Journey
+
+**Journey**:
+Everything from picking a destination to arriving there: first planning (parking scan and routes), then navigating the trip.
+_Avoid_: trip (that is only the navigating part), session
+
+**Route**:
+One way to drive from the user's location to the chosen parking spot; the planner offers the fastest and a few alternatives.
+_Avoid_: path, itinerary
+
+**Trip**:
+The navigating part of a journey: the drive along the chosen route to the parking spot, then the walking leg, with spoken guidance.
+_Avoid_: ride, navigation session
+
+**Walking leg**:
+The walk from the parking spot to the destination at the end of a trip.
+_Avoid_: last mile

@@ -163,6 +163,9 @@ export function formatArrival(seconds: number, now = new Date()): string {
 }
 
 /** Walking time at ~4.8 km/h (80 m/min), at least 1 minute. */
+/** Stable key for a coordinate, at about 1 m precision. */
+export const coordKey = (c: Coordinate): string => `${c.latitude.toFixed(5)},${c.longitude.toFixed(5)}`;
+
 /** Rough door-to-door drive before a real route exists: 1.35x the straight line at 45 km/h. */
 export function estimatedDriveSeconds(from: Coordinate, to: Coordinate): number {
   return (distanceMeters(from, to) * 1.35) / 12.5;

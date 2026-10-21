@@ -1,6 +1,7 @@
 // The one screen of the app: a full-bleed map with Apple Maps-style floating chrome.
-// Owns all state and wires services -> sheets/overlays. Modes:
-// browse (search sheet) -> place (place card) -> route (planner) -> nav (turn-by-turn).
+// Owns the screen state and wires services -> sheets/overlays. Modes:
+// browse (search sheet) -> place (place card) -> route (planner) -> nav (turn-by-turn);
+// route and nav are the journey's planning and navigating phases (useJourney).
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, Keyboard, Platform, StatusBar, Text, useWindowDimensions, View } from 'react-native';
 import MapView, { Details, LongPressEvent, MapPressEvent, MapType, PoiClickEvent, Region } from 'react-native-maps';
@@ -18,15 +19,12 @@ import {
   ParkingSpot,
   Place,
   RoadHazard,
-  RouteOption,
   SavedState,
   SpeedCamera,
   TravelPhase,
 } from './types';
 import { spacing, spring, text, useTheme } from './theme';
-import { bearing, distanceMeters } from './lib/geo';
-import { chooseParking, loadParkingOptions } from './services/parking';
-import { fetchDriveRoutes, fetchWalkRoute } from './services/routing';
+import { coordKey, distanceMeters } from './lib/geo';
 import { BUILTIN_CAMERAS, fetchOsmCameras, mergeCameras, upcomingCamera } from './services/cameras';
 import { confirmHazard, isLocalHazard, loadAllHazards, loadHazards, reportHazard, timeAgo } from './services/hazards';
 import { poiAt, poiCategoryFor, reverseGeocode } from './services/places';
@@ -44,7 +42,7 @@ import {
 } from './services/saved';
 import { voice } from './services/voice';
 import { addExplored, clearExplored, loadExplored, startBackgroundScratch, stopBackgroundScratch } from './services/scratchMap';
-import { useTripSimulation } from './hooks/useTripSimulation';
+import { useJourney } from './hooks/useJourney';
 import { cameraGlyph, hazardGlyph } from './components/glyphs';
 import { Glass, Icon } from './components/ui';
 import { SearchSheet } from './components/SearchSheet';
@@ -67,11 +65,9 @@ import {
 
 type Mode = 'browse' | 'place' | 'route' | 'nav';
 type Overlay = 'settings' | 'report' | null;
-type WalkRoute = { coordinates: Coordinate[]; distanceMeters: number; durationSeconds: number };
 
 const DEFAULT_COORD: Coordinate = { latitude: 52.3676, longitude: 4.9041 };
 const EMPTY_SAVED: SavedState = { home: null, work: null, favorites: [], recents: [] };
-const NO_ROUTES: RouteOption[] = [];
 const NO_PATH: Coordinate[] = [];
 // The map fires onPress right after a POI tap or marker press; ignore it for this long.
 const TAP_GUARD_MS = 600;
@@ -86,8 +82,6 @@ const NAV_CARD_HEIGHT = 92;
 const NAV_CLUSTER_SPACE = 12 + 52 + 8;
 // iOS: MapKit's compass sits top-right inside mapPadding; keep it left of the control column (10 + 44 + 8).
 const IOS_CONTROLS_INSET = Platform.OS === 'ios' ? 10 + 44 + 8 : 0;
-
-const coordKey = (c: Coordinate) => `${c.latitude.toFixed(5)},${c.longitude.toFixed(5)}`;
 
 // Like Apple Maps, the map never insets past the medium detent: on Android a taller padding leaves
 // no viewport for animateToRegion/fitToCoordinates and shifts the map on every detent change.
@@ -233,37 +227,6 @@ function useLiveFeeds(fix: Coordinate | null) {
   return { cameras, hazards, setHazards, active, refreshing, refresh };
 }
 
-/** Drive alternatives to the parking + walk from the parking, refetched per destination/parking pair. */
-function useRoutes(destination: Place | null, parking: ParkingSpot | null, fromRef: React.RefObject<Coordinate>) {
-  const key = destination && parking ? `${coordKey(parking.coordinate)}>${coordKey(destination.coordinate)}` : null;
-  const [data, setData] = useState<{ key: string; routes: RouteOption[]; walk: WalkRoute | null } | null>(null);
-
-  useEffect(() => {
-    // Never show a cached result while its refetch is in flight: it would land after GO.
-    setData(null);
-    if (!key || !destination || !parking) return;
-    let alive = true;
-    Promise.all([
-      fetchDriveRoutes(fromRef.current, parking.coordinate),
-      fetchWalkRoute(parking.coordinate, destination.coordinate),
-    ])
-      .then(([routes, walk]) => {
-        if (alive) setData({ key, routes, walk });
-      })
-      .catch(() => {
-        if (alive) setData({ key, routes: [], walk: null });
-      });
-    return () => {
-      alive = false;
-    };
-  }, [key]);
-
-  // Results for a previous destination/parking never leak into the current one (also covers the render
-  // before the effect above clears them).
-  const current = data && data.key === key ? data : null;
-  return { current, loading: key !== null && current === null };
-}
-
 function Toast({ message, top, onDone }: { message: string; top: number; onDone: () => void }) {
   const theme = useTheme();
   const anim = useRef(new Animated.Value(0)).current;
@@ -317,7 +280,8 @@ export default function MapScreen(): React.JSX.Element {
   const lastMapTap = useRef(0);
   const poiTapSeq = useRef(0);
 
-  const [mode, setMode] = useState<Mode>('browse');
+  // Outside a journey: the search sheet or a place card.
+  const [view, setView] = useState<'browse' | 'place'>('browse');
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [memeVisible, setMemeVisible] = useState(false);
   const [toast, setToast] = useState<{ id: number; message: string } | null>(null);
@@ -331,16 +295,9 @@ export default function MapScreen(): React.JSX.Element {
   const [explored, setExplored] = useState<ExploredGeometry>(null);
 
   const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
-  const [destination, setDestination] = useState<Place | null>(null);
-  const [maxWalk, setMaxWalk] = useState(500);
-  // null while the parking registry / map lookups for the current destination are in flight.
-  const [parkingOptions, setParkingOptions] = useState<ParkingSpot[] | null>(null);
-  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
-  const [goId, setGoId] = useState<string | null>(null);
 
   // Handlers and async callbacks read these so they never act on a stale render.
-  const modeRef = useRef(mode);
-  modeRef.current = mode;
+  const modeRef = useRef<Mode>('browse'); // kept current once the journey is known, below
   const centeredRef = useRef(centered);
   centeredRef.current = centered;
   const sheetHeightRef = useRef(sheetHeight);
@@ -416,42 +373,27 @@ export default function MapScreen(): React.JSX.Element {
     else stopBackgroundScratch().catch(() => undefined);
   }, [settings.showScratchMap, prefsLoaded]);
 
-  // ---------- Destination, parking, routes ----------
+  // ---------- Journey: destination, parking, routes, trip ----------
 
-  useEffect(() => {
-    setParkingOptions(null);
-    if (!destination) return;
-    let alive = true;
-    loadParkingOptions(destination.coordinate, userCoordRef.current)
-      .then((options) => {
-        // Late results must not swap the parking (and so the route) under a running trip.
-        if (alive && modeRef.current !== 'nav') setParkingOptions(options);
-      })
-      .catch(() => alive && setParkingOptions([]));
-    return () => {
-      alive = false;
-    };
-  }, [destination]);
+  const parkingRef = useRef<ParkingSpot | null>(null); // kept current below; read by the trip's phase callback
 
-  const scan = useMemo(() => (parkingOptions ? chooseParking(parkingOptions, maxWalk) : null), [parkingOptions, maxWalk]);
-  const parking = destination ? scan?.best ?? null : null;
-  const parkingLoading = !!destination && parkingOptions === null;
-  const parkingRef = useRef(parking);
+  const handlePhaseChange = useCallback((phase: TravelPhase | 'arrived') => {
+    const spot = parkingRef.current;
+    if (phase === 'walking' && spot) {
+      mapRef.current?.animateCamera({ center: spot.coordinate, pitch: 45, altitude: 300, zoom: 18.5 }, { duration: 800 });
+    }
+  }, []);
+
+  const journey = useJourney({ origin: () => userCoordRef.current, cameras, onPhaseChange: handlePhaseChange });
+  const { trip, destination, parking, routes, selectedRoute } = journey;
   parkingRef.current = parking;
+  const mode: Mode = journey.phase === 'planning' ? 'route' : journey.phase === 'navigating' ? 'nav' : view;
+  modeRef.current = mode;
 
-  const routeState = useRoutes(destination, parking, userCoordRef);
-  const routes = routeState.current?.routes ?? NO_ROUTES;
-  const walk = routeState.current?.walk ?? null;
-  const walkPath = walk?.coordinates ?? NO_PATH;
-  const selectedRoute = routes.find((r) => r.id === selectedRouteId) ?? routes[0] ?? null;
-
-  // New routes: select the fastest and frame it above the planner sheet.
+  // New routes (the fastest comes selected): frame them above the planner sheet.
   useEffect(() => {
-    const data = routeState.current;
-    const fastest = data?.routes[0];
-    // A late result must never re-select or re-frame under a running trip.
-    if (!fastest || !destination || modeRef.current !== 'route') return;
-    setSelectedRouteId(fastest.id);
+    const fastest = routes[0];
+    if (!fastest || !destination || journey.phase !== 'planning') return;
     const step = Math.max(1, Math.floor(fastest.coordinates.length / 40));
     const points = fastest.coordinates.filter((_, i) => i % step === 0);
     points.push(...fastest.coordinates.slice(-1), destination.coordinate);
@@ -465,41 +407,9 @@ export default function MapScreen(): React.JSX.Element {
       edgePadding: { top: insets.top + 80 - baseTop, right: 60, bottom: Math.max(24, sheet + 24 - baseBottom), left: 60 },
       animated: true,
     });
-  }, [routeState.current]);
+  }, [routes]);
 
-  // ---------- Trip ----------
-
-  const handlePhaseChange = useCallback((phase: TravelPhase | 'arrived') => {
-    const spot = parkingRef.current;
-    if (phase === 'walking' && spot) {
-      mapRef.current?.animateCamera({ center: spot.coordinate, pitch: 45, altitude: 300, zoom: 18.5 }, { duration: 800 });
-    }
-  }, []);
-
-  const { trip, start, stop, cycleSpeedTest } = useTripSimulation({
-    route: selectedRoute,
-    walkPath,
-    parking,
-    destination,
-    cameras,
-    onPhaseChange: handlePhaseChange,
-  });
-
-  // GO selects a route and starts it; start once the hook has received that route.
-  useEffect(() => {
-    if (!goId || !selectedRoute || selectedRoute.id !== goId) return;
-    setGoId(null);
-    start();
-    setMode('nav');
-    const [a, b] = selectedRoute.coordinates;
-    if (a) {
-      mapRef.current?.animateCamera(
-        { center: a, heading: b ? bearing(a, b) : 0, pitch: 55, altitude: 380, zoom: 18 },
-        { duration: 800 }
-      );
-    }
-  }, [goId, selectedRoute, start]);
-
+  // Follows the vehicle from GO on (its first position is the start of the route).
   useEffect(() => {
     if (mode !== 'nav' || !trip) return;
     mapRef.current?.animateCamera(
@@ -565,7 +475,7 @@ export default function MapScreen(): React.JSX.Element {
     poiTapSeq.current++; // drop any iOS POI lookup still in flight
     Keyboard.dismiss();
     setSelectedPlace(place);
-    setMode('place');
+    setView('place');
     focusPlace(place.coordinate);
     if (recent) rememberRecent(place);
   };
@@ -593,30 +503,21 @@ export default function MapScreen(): React.JSX.Element {
 
   const closePlace = () => {
     setSelectedPlace(null);
-    setMode('browse');
+    setView('browse');
   };
 
   const startDirections = (place: Place) => {
     poiTapSeq.current++;
     Keyboard.dismiss();
     setSelectedPlace(null);
-    setSelectedRouteId(null);
-    setDestination(place);
-    setMode('route');
+    setView('browse'); // where the user lands when the journey ends
+    journey.plan(place);
     rememberRecent(place);
   };
 
-  const clearDestination = () => {
-    setDestination(null);
-    setSelectedRouteId(null);
-    setGoId(null);
-    setMode('browse');
+  const endJourney = () => {
+    journey.end();
     flyToUser();
-  };
-
-  const endTrip = () => {
-    stop();
-    clearDestination();
   };
 
   const handleToggleFavorite = (place: Place) => {
@@ -822,11 +723,11 @@ export default function MapScreen(): React.JSX.Element {
           <RouteLines
             routes={routes}
             selectedId={selectedRoute?.id ?? null}
-            walkPath={walkPath}
+            walkPath={journey.walk?.coordinates ?? NO_PATH}
             navigating={mode === 'nav'}
             onSelectRoute={(id: string) => {
               lastMapTap.current = Date.now();
-              setSelectedRouteId(id);
+              journey.selectRoute(id);
             }}
           />
         )}
@@ -872,7 +773,7 @@ export default function MapScreen(): React.JSX.Element {
         <PlaceCard
           place={selectedPlace}
           userLocation={userCoord}
-          maxWalkMeters={maxWalk}
+          maxWalkMeters={journey.maxWalk}
           isFavorite={isFavorite(selectedPlace, saved.favorites)}
           onDirections={startDirections}
           onToggleFavorite={handleToggleFavorite}
@@ -885,19 +786,16 @@ export default function MapScreen(): React.JSX.Element {
         <RoutePlanner
           destination={destination}
           parking={parking}
-          freeHint={scan?.freeHint ?? null}
+          freeHint={journey.freeHint}
           routes={routes}
           selectedRouteId={selectedRoute?.id ?? null}
-          loading={parkingLoading || routeState.loading}
-          walk={walk}
-          maxWalkMeters={maxWalk}
-          onChangeMaxWalk={setMaxWalk}
-          onSelectRoute={setSelectedRouteId}
-          onGo={(id) => {
-            setSelectedRouteId(id);
-            setGoId(id);
-          }}
-          onClose={clearDestination}
+          loading={journey.loading}
+          walk={journey.walk}
+          maxWalkMeters={journey.maxWalk}
+          onChangeMaxWalk={journey.setMaxWalk}
+          onSelectRoute={journey.selectRoute}
+          onGo={journey.go}
+          onClose={endJourney}
           onHeightChange={setSheetHeight}
         />
       )}
@@ -909,9 +807,9 @@ export default function MapScreen(): React.JSX.Element {
           parking={parking}
           voiceMuted={settings.voiceMuted}
           onToggleVoice={() => changeSettings({ ...settings, voiceMuted: !settings.voiceMuted })}
-          onEnd={endTrip}
+          onEnd={endJourney}
           onReport={() => setOverlay('report')}
-          onCycleSpeedTest={cycleSpeedTest}
+          onCycleSpeedTest={journey.cycleSpeedTest}
         />
       )}
 

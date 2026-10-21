@@ -118,6 +118,13 @@ export interface RouteOption {
   isFallback: boolean; // true when OSRM was unreachable and this is a straight-ish estimate
 }
 
+/** The walk from the parking spot to the destination. */
+export interface WalkRoute {
+  coordinates: Coordinate[];
+  distanceMeters: number;
+  durationSeconds: number;
+}
+
 export type TravelPhase = 'driving' | 'walking';
 
 // ---------- Speed cameras ----------
