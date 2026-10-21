@@ -4,9 +4,12 @@
 //  - parking lots and garages mapped in OpenStreetMap.
 // The original app invented six spots around every destination; that is gone on purpose.
 import type { Coordinate, FacilityType, ParkingScan, ParkingSpot, ParkingType } from '../types';
-import { bbox, centroid, distanceMeters, walkMinutes } from '../lib/geo';
+import { bbox, centroid, distanceMeters, estimatedDriveSeconds, walkMinutes } from '../lib/geo';
 import { fetchJson, overpass, overpassBox } from '../lib/http';
 import { inZone, StreetRules, streetRulesAt, Zone, zonesAround } from './rdw';
+
+/** The max walking distances the user can pick, in meters. */
+export const WALK_OPTIONS_METERS = [250, 500, 750, 1200];
 
 // Paid kerbside without a published tariff: ranks between OSM lots (2) and garages (3).
 const UNKNOWN_STREET_RATE = 2.5;
@@ -40,7 +43,17 @@ export function chooseParking(options: ParkingSpot[], maxWalkMeters: number): Pa
     spots[0] ??
     null;
 
-  return { spots, best, nearestFree };
+  // Blue zone (pricePerHour 0) counts as free, like the old drawer.
+  const bestIsFree = !!best && (best.type === 'free' || best.pricePerHour === 0);
+  const freeWalk = nearestFree?.distanceToDestMeters ?? 0;
+  // The shortest walk option that reaches the free spot, else the longest one.
+  const reach = WALK_OPTIONS_METERS.find((m) => m >= freeWalk) ?? Math.max(...WALK_OPTIONS_METERS);
+  const freeHint =
+    best && !bestIsFree && nearestFree && freeWalk > maxWalkMeters
+      ? { spot: nearestFree, walkMeters: reach > maxWalkMeters ? reach : null }
+      : null;
+
+  return { spots, best, freeHint };
 }
 
 /** Nearest drivable road to `c`, with its name, via OSRM's nearest service. */
@@ -203,17 +216,43 @@ async function fetchOsmParking(center: Coordinate, radiusKm = 0.8): Promise<{ sp
   return out;
 }
 
+const QUARTER_HOUR_MS = 15 * 60 * 1000;
+const MEMO_LIMIT = 20;
+// ponytail: session memo per destination (~10 m) and quarter hour of arrival; oldest dropped past MEMO_LIMIT.
+const memo = new Map<string, Promise<ParkingSpot[]>>();
+
 /**
- * Every real parking option around `dest` for a car arriving at `arrival`.
- * Never rejects; always includes at least the destination's own street.
+ * Every real parking option around `dest` for a car leaving `from` now, with zone hours checked at
+ * the estimated arrival. Never rejects; always includes at least the destination's own street.
+ * The same destination and quarter hour of arrival reuse one lookup, so the place card and
+ * Directions see the same options.
  */
-export async function loadParkingOptions(dest: Coordinate, arrival: Date): Promise<ParkingSpot[]> {
+export function loadParkingOptions(dest: Coordinate, from: Coordinate): Promise<ParkingSpot[]> {
+  const arrival = new Date(Date.now() + estimatedDriveSeconds(from, dest) * 1000);
+  const slot = Math.floor(arrival.getTime() / QUARTER_HOUR_MS);
+  const key = `${dest.latitude.toFixed(4)},${dest.longitude.toFixed(4)}@${slot}`;
+  let options = memo.get(key);
+  if (!options) {
+    const scan = scanParking(dest, arrival);
+    options = scan.then((s) => s.options);
+    memo.set(key, options);
+    if (memo.size > MEMO_LIMIT) memo.delete(memo.keys().next().value!);
+    // A lookup that couldn't reach the parking registry isn't kept; the next one retries.
+    scan.then((s) => s.complete || memo.delete(key));
+  }
+  return options;
+}
+
+async function scanParking(dest: Coordinate, arrival: Date): Promise<{ options: ParkingSpot[]; complete: boolean }> {
   // Public Overpass is often overloaded; the street rules alone answer "where can I park free",
   // so mapped lots get 4 s and are skipped after that (the query stays cached for next time).
+  let osmTimer: ReturnType<typeof setTimeout> | undefined;
   const osmWithin4s = Promise.race([
     fetchOsmParking(dest).catch(() => []),
-    new Promise<[]>((resolve) => setTimeout(() => resolve([]), 4000)),
-  ]);
+    new Promise<[]>((resolve) => {
+      osmTimer = setTimeout(() => resolve([]), 4000);
+    }),
+  ]).finally(() => clearTimeout(osmTimer));
   const [zones, street, osm] = await Promise.all([
     zonesAround(dest).catch(() => null),
     nearestStreet(dest).catch(() => null),
@@ -236,5 +275,5 @@ export async function loadParkingOptions(dest: Coordinate, arrival: Date): Promi
       options.push(spot);
     }
   }
-  return options.sort(byDistance);
+  return { options: options.sort(byDistance), complete: zones !== null };
 }

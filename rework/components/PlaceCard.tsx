@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import type { Coordinate, ParkingSpot, Place } from '../types';
 import { text, useTheme } from '../theme';
-import { distanceMeters, formatDistance, formatDuration, walkMinutes } from '../lib/geo';
+import { distanceMeters, estimatedDriveSeconds, formatDistance, formatDuration, walkMinutes } from '../lib/geo';
 import { chooseParking, loadParkingOptions } from '../services/parking';
 import { poiCategoryFor } from '../services/places';
 import { parkingGlyph, poiGlyph } from './glyphs';
@@ -12,9 +12,6 @@ import { ActionTile, CloseButton, GroupLabel, Hairline, IconBadge, InsetGroup, r
 import { Sheet } from './Sheet';
 
 const PEEK = 196;
-// Rough door-to-door city estimate shown before a real route exists.
-const ROAD_FACTOR = 1.35;
-const CITY_KMH = 32;
 
 function formatCoordinate(c: Coordinate): string {
   const lat = `${Math.abs(c.latitude).toFixed(5)}° ${c.latitude >= 0 ? 'N' : 'S'}`;
@@ -41,6 +38,7 @@ function Detail({ label, value, separator }: { label: string; value: string; sep
 export function PlaceCard({
   place,
   userLocation,
+  maxWalkMeters,
   isFavorite,
   onDirections,
   onToggleFavorite,
@@ -49,6 +47,7 @@ export function PlaceCard({
 }: {
   place: Place;
   userLocation: Coordinate;
+  maxWalkMeters: number;
   isFavorite: boolean;
   onDirections: (place: Place) => void;
   onToggleFavorite: (place: Place) => void;
@@ -65,23 +64,22 @@ export function PlaceCard({
   const glyph = poiGlyph(place.poiCategory ?? poiCategoryFor(place.name));
   const where = place.city || place.subtitle;
   const away = distanceMeters(userLocation, place.coordinate);
-  const driveSeconds = (away * ROAD_FACTOR) / (CITY_KMH / 3.6);
-  const driveTime = formatDuration(driveSeconds);
+  const driveTime = formatDuration(estimatedDriveSeconds(userLocation, place.coordinate));
 
-  // Real parking (registry zones + map) for the time you'd get there; undefined while loading.
+  // The spot Directions will pick: same lookup and walk limit as the route planner; undefined while loading.
   const { latitude, longitude } = place.coordinate;
   const [best, setBest] = useState<ParkingSpot | null | undefined>(undefined);
   useEffect(() => {
     let alive = true;
     setBest(undefined);
-    loadParkingOptions({ latitude, longitude }, new Date(Date.now() + driveSeconds * 1000))
-      .then((options) => alive && setBest(chooseParking(options, 500).best))
+    loadParkingOptions({ latitude, longitude }, userLocation)
+      .then((options) => alive && setBest(chooseParking(options, maxWalkMeters).best))
       .catch(() => alive && setBest(null));
     return () => {
       alive = false;
     };
-    // driveSeconds only tunes the arrival time; refetching as the user moves isn't worth it.
-  }, [latitude, longitude]);
+    // The user's position only tunes the arrival time; refetching as they move isn't worth it.
+  }, [latitude, longitude, maxWalkMeters]);
 
   const header = (
     <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>

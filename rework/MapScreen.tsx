@@ -422,9 +422,7 @@ export default function MapScreen(): React.JSX.Element {
     setParkingOptions(null);
     if (!destination) return;
     let alive = true;
-    // Zone hours depend on when you get there: rough drive estimate at ~45 km/h over 1.35x the straight line.
-    const driveSeconds = (distanceMeters(userCoordRef.current, destination.coordinate) * 1.35) / 12.5;
-    loadParkingOptions(destination.coordinate, new Date(Date.now() + driveSeconds * 1000))
+    loadParkingOptions(destination.coordinate, userCoordRef.current)
       .then((options) => {
         // Late results must not swap the parking (and so the route) under a running trip.
         if (alive && modeRef.current !== 'nav') setParkingOptions(options);
@@ -874,6 +872,7 @@ export default function MapScreen(): React.JSX.Element {
         <PlaceCard
           place={selectedPlace}
           userLocation={userCoord}
+          maxWalkMeters={maxWalk}
           isFavorite={isFavorite(selectedPlace, saved.favorites)}
           onDirections={startDirections}
           onToggleFavorite={handleToggleFavorite}
@@ -886,7 +885,7 @@ export default function MapScreen(): React.JSX.Element {
         <RoutePlanner
           destination={destination}
           parking={parking}
-          nearestFree={scan?.nearestFree ?? null}
+          freeHint={scan?.freeHint ?? null}
           routes={routes}
           selectedRouteId={selectedRoute?.id ?? null}
           loading={parkingLoading || routeState.loading}

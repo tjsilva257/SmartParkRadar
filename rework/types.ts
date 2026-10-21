@@ -69,7 +69,11 @@ export interface ParkingSpot {
 export interface ParkingScan {
   spots: ParkingSpot[];
   best: ParkingSpot | null;
-  nearestFree: ParkingSpot | null;
+  /**
+   * Nearest free parking when the best spot isn't free and the free one is beyond the max walk.
+   * `walkMeters` is the max-walk option that reaches it; null when no option walks farther.
+   */
+  freeHint: { spot: ParkingSpot; walkMeters: number | null } | null;
 }
 
 // ---------- Routing ----------

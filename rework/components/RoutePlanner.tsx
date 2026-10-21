@@ -2,19 +2,15 @@
 // GO pills, the chosen parking and the max walking distance preference.
 import React, { useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
-import type { ParkingSpot, Place, RouteOption } from '../types';
+import type { ParkingScan, ParkingSpot, Place, RouteOption } from '../types';
 import { tabular, text, useTheme } from '../theme';
 import { formatDistance, formatDuration, walkMinutes } from '../lib/geo';
+import { WALK_OPTIONS_METERS } from '../services/parking';
 import { facilityLabel, parkingGlyph } from './glyphs';
 import { Button, CloseButton, GroupLabel, Icon, IconBadge, InsetGroup, resolveColor, Row, Segmented, withAlpha } from './ui';
 import { Sheet } from './Sheet';
 
-const WALK_OPTIONS = [
-  { value: 250, label: '250 m' },
-  { value: 500, label: '500 m' },
-  { value: 750, label: '750 m' },
-  { value: 1200, label: '1.2 km' },
-];
+const WALK_OPTIONS = WALK_OPTIONS_METERS.map((value) => ({ value, label: formatDistance(value) }));
 
 /** Rounded-square "P" in the parking type's color, same mark as the map overlay. */
 function ParkingMark({ color, size = 20 }: { color: string; size?: number }) {
@@ -95,7 +91,7 @@ function RouteRow({
 export function RoutePlanner({
   destination,
   parking,
-  nearestFree,
+  freeHint,
   routes,
   selectedRouteId,
   loading,
@@ -109,7 +105,7 @@ export function RoutePlanner({
 }: {
   destination: Place;
   parking: ParkingSpot | null;
-  nearestFree: ParkingSpot | null;
+  freeHint: ParkingScan['freeHint'];
   routes: RouteOption[];
   selectedRouteId: string | null;
   loading: boolean;
@@ -135,12 +131,6 @@ export function RoutePlanner({
     : parking
       ? `${parking.walkMinutes} min`
       : '…';
-
-  // Same rule as the old drawer: blue-zone (pricePerHour 0) counts as free.
-  const parkingIsFree = !!parking && (parking.type === 'free' || parking.pricePerHour === 0);
-  const showFreeHint =
-    !!parking && !parkingIsFree && !!nearestFree && nearestFree.distanceToDestMeters > maxWalkMeters;
-  const freeTarget = nearestFree ? ([500, 750, 1200].find((m) => m >= nearestFree.distanceToDestMeters) ?? 1200) : 1200;
 
   const header = (
     <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
@@ -213,7 +203,7 @@ export function RoutePlanner({
           </>
         )}
 
-        {showFreeHint && nearestFree && (
+        {freeHint && (
           <View
             style={{
               flexDirection: 'row',
@@ -230,10 +220,10 @@ export function RoutePlanner({
           >
             <Icon name="leaf" size={18} color={theme.green} />
             <Text style={[text.subhead, { flex: 1, color: theme.label }]}>
-              {`Free parking ${formatDistance(nearestFree.distanceToDestMeters)} from your destination`}
+              {`Free parking ${formatDistance(freeHint.spot.distanceToDestMeters)} from your destination`}
             </Text>
-            {freeTarget > maxWalkMeters && (
-              <Button title="Walk farther" color="green" size="small" onPress={() => onChangeMaxWalk(freeTarget)} />
+            {freeHint.walkMeters !== null && (
+              <Button title="Walk farther" color="green" size="small" onPress={() => onChangeMaxWalk(freeHint.walkMeters!)} />
             )}
           </View>
         )}

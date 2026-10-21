@@ -114,8 +114,22 @@ export function describeHours(frames: Frame[]): string {
   return parts.join(' · ');
 }
 
+// ponytail: session cache per ~10 m cell, unbounded; a destination is looked up again on Directions.
+const municipalityCache = new Map<string, Promise<string | null>>();
+
+function municipalityOf(c: Coordinate): Promise<string | null> {
+  const key = `${c.latitude.toFixed(4)},${c.longitude.toFixed(4)}`;
+  let code = municipalityCache.get(key);
+  if (!code) {
+    code = lookupMunicipality(c);
+    municipalityCache.set(key, code);
+    code.then((m) => m ?? municipalityCache.delete(key)).catch(() => municipalityCache.delete(key));
+  }
+  return code;
+}
+
 /** CBS municipality code ("0513" -> "513"), which RDW uses as area manager id. */
-async function municipalityOf(c: Coordinate): Promise<string | null> {
+async function lookupMunicipality(c: Coordinate): Promise<string | null> {
   const data = await fetchJson<any>(
     `https://api.pdok.nl/bzk/locatieserver/search/v3_1/reverse?lat=${c.latitude}&lon=${c.longitude}&rows=1&fl=gemeentecode`,
     { timeoutMs: 5000 }

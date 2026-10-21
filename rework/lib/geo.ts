@@ -163,6 +163,11 @@ export function formatArrival(seconds: number, now = new Date()): string {
 }
 
 /** Walking time at ~4.8 km/h (80 m/min), at least 1 minute. */
+/** Rough door-to-door drive before a real route exists: 1.35x the straight line at 45 km/h. */
+export function estimatedDriveSeconds(from: Coordinate, to: Coordinate): number {
+  return (distanceMeters(from, to) * 1.35) / 12.5;
+}
+
 export function walkMinutes(meters: number): number {
   return Math.max(1, Math.round(meters / 80));
 }
