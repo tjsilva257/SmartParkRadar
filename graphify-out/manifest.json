@@ -1,0 +1,218 @@
+{
+  "App.tsx": {
+    "mtime": 1788881287.4582026,
+    "seen": 1792507013.2783263,
+    "ast_hash": "f900cb0e40b9be41ccbdff0bfa84426a",
+    "semantic_hash": "f900cb0e40b9be41ccbdff0bfa84426a"
+  },
+  "app.json": {
+    "mtime": 1788885574.5375388,
+    "seen": 1792507013.278334,
+    "ast_hash": "217d6bcc9bcc8a27f4b6e31bb8a6e69c",
+    "semantic_hash": "217d6bcc9bcc8a27f4b6e31bb8a6e69c"
+  },
+  "app/index.tsx": {
+    "mtime": 1789042309.1635852,
+    "seen": 1792507013.2783372,
+    "ast_hash": "413270f4faea80aa296bc8da51bdce18",
+    "semantic_hash": "413270f4faea80aa296bc8da51bdce18"
+  },
+  "metro.config.js": {
+    "mtime": 1788881287.474203,
+    "seen": 1792507013.2783394,
+    "ast_hash": "131e03c9c54eaaf17fbf78a8a59d7073",
+    "semantic_hash": "131e03c9c54eaaf17fbf78a8a59d7073"
+  },
+  "nativewind-env.d.ts": {
+    "mtime": 1788881287.4782033,
+    "seen": 1792507013.278341,
+    "ast_hash": "4b19c330825dd0177d8537241886c489",
+    "semantic_hash": "4b19c330825dd0177d8537241886c489"
+  },
+  "package.json": {
+    "mtime": 1789029034.036579,
+    "seen": 1792507013.2783425,
+    "ast_hash": "ea1a5cd5ee6853535b9a77572b5a11d5",
+    "semantic_hash": "ea1a5cd5ee6853535b9a77572b5a11d5"
+  },
+  "src/components/AnimatedPoiMarker.tsx": {
+    "mtime": 1789039493.7704568,
+    "seen": 1792507013.2783442,
+    "ast_hash": "9c577cad936daa969af27fae8e210150",
+    "semantic_hash": "9c577cad936daa969af27fae8e210150"
+  },
+  "src/components/AnimatedRadarPill.tsx": {
+    "mtime": 1789039085.623942,
+    "seen": 1792507013.2783458,
+    "ast_hash": "88ee4fb36f9e9e69b8c1ce6041797115",
+    "semantic_hash": "88ee4fb36f9e9e69b8c1ce6041797115"
+  },
+  "src/components/HazardReportModal.tsx": {
+    "mtime": 1789036235.9318094,
+    "seen": 1792507013.2783475,
+    "ast_hash": "f6d421c07757745b5c8e06ea9fdd9cc4",
+    "semantic_hash": "f6d421c07757745b5c8e06ea9fdd9cc4"
+  },
+  "src/components/MapIconFilterModal.tsx": {
+    "mtime": 1789039085.6271667,
+    "seen": 1792507013.2783492,
+    "ast_hash": "23a55c97c6a933da2e7bb19c675c10b9",
+    "semantic_hash": "23a55c97c6a933da2e7bb19c675c10b9"
+  },
+  "src/components/MapToolsMenu.tsx": {
+    "mtime": 1789040860.7933922,
+    "seen": 1792507013.2783508,
+    "ast_hash": "f40f7728dc8158b5d7b75074fc984430",
+    "semantic_hash": "f40f7728dc8158b5d7b75074fc984430"
+  },
+  "src/components/MemeShakeModal.tsx": {
+    "mtime": 1789035182.6971703,
+    "seen": 1792507013.2783527,
+    "ast_hash": "9552b7e103336f7046a3084dfa2d30bb",
+    "semantic_hash": "9552b7e103336f7046a3084dfa2d30bb"
+  },
+  "src/components/NavigationHUD.tsx": {
+    "mtime": 1789039085.650112,
+    "seen": 1792507013.2783542,
+    "ast_hash": "c27c9acd7732267d07d1bb55d41899af",
+    "semantic_hash": "c27c9acd7732267d07d1bb55d41899af"
+  },
+  "src/components/ParkingAreaOverlay.tsx": {
+    "mtime": 1789042309.1635852,
+    "seen": 1792507013.278356,
+    "ast_hash": "6190eec8ae77bca46a810241974da9f3",
+    "semantic_hash": "6190eec8ae77bca46a810241974da9f3"
+  },
+  "src/components/PoiPreviewCard.tsx": {
+    "mtime": 1789040860.7957716,
+    "seen": 1792507013.2783575,
+    "ast_hash": "d11f2ef0b5239a7740e5f00e0506b01a",
+    "semantic_hash": "d11f2ef0b5239a7740e5f00e0506b01a"
+  },
+  "src/components/RouteDrawer.tsx": {
+    "mtime": 1789042309.1643147,
+    "seen": 1792507013.2783594,
+    "ast_hash": "848d7482400b36e4e01535adfa9ca831",
+    "semantic_hash": "848d7482400b36e4e01535adfa9ca831"
+  },
+  "src/components/ScratchMapOverlay.tsx": {
+    "mtime": 1788885574.5402482,
+    "seen": 1792507013.2783608,
+    "ast_hash": "77a708bee8e7e7032734b0c23af03113",
+    "semantic_hash": "77a708bee8e7e7032734b0c23af03113"
+  },
+  "src/components/SearchBar.tsx": {
+    "mtime": 1789039493.7771795,
+    "seen": 1792507013.2783623,
+    "ast_hash": "64020a089d3b72551080dbbd9206a95b",
+    "semantic_hash": "64020a089d3b72551080dbbd9206a95b"
+  },
+  "src/hooks/useShakeDetector.ts": {
+    "mtime": 1789029212.416768,
+    "seen": 1792507013.2783642,
+    "ast_hash": "afa8e1ba4ac1ca9639d6e9eb85700137",
+    "semantic_hash": "afa8e1ba4ac1ca9639d6e9eb85700137"
+  },
+  "src/services/cameraRadarService.ts": {
+    "mtime": 1789036235.897499,
+    "seen": 1792507013.2783659,
+    "ast_hash": "8f58a519e45c156f03fbabe349396da0",
+    "semantic_hash": "8f58a519e45c156f03fbabe349396da0"
+  },
+  "src/services/favoritesService.ts": {
+    "mtime": 1788887571.8724618,
+    "seen": 1792507013.2783675,
+    "ast_hash": "9e529dbb290102b58d66cd9be5392d24",
+    "semantic_hash": "9e529dbb290102b58d66cd9be5392d24"
+  },
+  "src/services/hazardService.ts": {
+    "mtime": 1789036235.93581,
+    "seen": 1792507013.2783692,
+    "ast_hash": "0a094f0c72574ba1e807bb2eac8506b5",
+    "semantic_hash": "0a094f0c72574ba1e807bb2eac8506b5"
+  },
+  "src/services/hectometerService.ts": {
+    "mtime": 1789036235.93581,
+    "seen": 1792507013.2783713,
+    "ast_hash": "7e95d6415ae9ea9c09c89437787583f0",
+    "semantic_hash": "7e95d6415ae9ea9c09c89437787583f0"
+  },
+  "src/services/iconFilterService.ts": {
+    "mtime": 1789036749.4132955,
+    "seen": 1792507013.278373,
+    "ast_hash": "1ee8cf861476c067cc34fdbe9bbf641f",
+    "semantic_hash": "1ee8cf861476c067cc34fdbe9bbf641f"
+  },
+  "src/services/parkingAreaService.ts": {
+    "mtime": 1789042309.1956909,
+    "seen": 1792507013.2783747,
+    "ast_hash": "9dfc6a2fb7c289cd99e0e0448be05198",
+    "semantic_hash": "9dfc6a2fb7c289cd99e0e0448be05198"
+  },
+  "src/services/parkingScanner.ts": {
+    "mtime": 1789042309.1956909,
+    "seen": 1792507013.2783763,
+    "ast_hash": "cbd32432f904f8dfe792b1949b8e12c9",
+    "semantic_hash": "cbd32432f904f8dfe792b1949b8e12c9"
+  },
+  "src/services/placesService.ts": {
+    "mtime": 1788889667.257805,
+    "seen": 1792507013.2783782,
+    "ast_hash": "df1fc3fbadfb57f760915eb14a7db5c5",
+    "semantic_hash": "df1fc3fbadfb57f760915eb14a7db5c5"
+  },
+  "src/services/routingService.ts": {
+    "mtime": 1788881287.5412028,
+    "seen": 1792507013.27838,
+    "ast_hash": "d7f03ff263afe826b7e66a67b21b8146",
+    "semantic_hash": "d7f03ff263afe826b7e66a67b21b8146"
+  },
+  "src/services/scratchMapService.ts": {
+    "mtime": 1788885574.5479164,
+    "seen": 1792507013.2783816,
+    "ast_hash": "2784fd30c1f919125f9c6bf86885c2f2",
+    "semantic_hash": "2784fd30c1f919125f9c6bf86885c2f2"
+  },
+  "src/services/scratchMapTracker.ts": {
+    "mtime": 1788885574.5618057,
+    "seen": 1792507013.2783833,
+    "ast_hash": "b3c78febb4f87f52153edc72c66ebd63",
+    "semantic_hash": "b3c78febb4f87f52153edc72c66ebd63"
+  },
+  "src/services/searchService.ts": {
+    "mtime": 1788887571.8384378,
+    "seen": 1792507013.278385,
+    "ast_hash": "97b5baef94daee3f286114237ef8a37d",
+    "semantic_hash": "97b5baef94daee3f286114237ef8a37d"
+  },
+  "src/services/voiceGuidanceService.ts": {
+    "mtime": 1788888867.019278,
+    "seen": 1792507013.2783866,
+    "ast_hash": "576f85ab840d9544d219eacb7b0f19f2",
+    "semantic_hash": "576f85ab840d9544d219eacb7b0f19f2"
+  },
+  "src/types/parking.ts": {
+    "mtime": 1789042309.2016914,
+    "seen": 1792507013.2784083,
+    "ast_hash": "0e6a827d9a923fd832cfc0a7e36968d1",
+    "semantic_hash": "0e6a827d9a923fd832cfc0a7e36968d1"
+  },
+  "src/utils/distance.ts": {
+    "mtime": 1788881287.5602036,
+    "seen": 1792507013.27841,
+    "ast_hash": "2a2384c48f9b09aebe4b6bc570120d43",
+    "semantic_hash": "2a2384c48f9b09aebe4b6bc570120d43"
+  },
+  "tailwind.config.js": {
+    "mtime": 1788886734.5084076,
+    "seen": 1792507013.2784123,
+    "ast_hash": "199602a718bd27cda761a881ff148616",
+    "semantic_hash": "199602a718bd27cda761a881ff148616"
+  },
+  "tsconfig.json": {
+    "mtime": 1788882328.6167116,
+    "seen": 1792507013.278415,
+    "ast_hash": "11082f7bba6dfa909e2c6a4bfe089098",
+    "semantic_hash": "11082f7bba6dfa909e2c6a4bfe089098"
+  }
+}
