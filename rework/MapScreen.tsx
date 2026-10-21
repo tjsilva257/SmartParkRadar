@@ -25,7 +25,7 @@ import {
 } from './types';
 import { spacing, spring, text, useTheme } from './theme';
 import { bearing, distanceMeters } from './lib/geo';
-import { fetchOsmParking, pickBestOsm, scanParking } from './services/parking';
+import { chooseParking, loadParkingOptions } from './services/parking';
 import { fetchDriveRoutes, fetchWalkRoute } from './services/routing';
 import { BUILTIN_CAMERAS, fetchOsmCameras, mergeCameras, upcomingCamera } from './services/cameras';
 import { confirmHazard, isLocalHazard, loadAllHazards, loadHazards, reportHazard, timeAgo } from './services/hazards';
@@ -333,7 +333,8 @@ export default function MapScreen(): React.JSX.Element {
   const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
   const [destination, setDestination] = useState<Place | null>(null);
   const [maxWalk, setMaxWalk] = useState(500);
-  const [osmSpots, setOsmSpots] = useState<ParkingSpot[]>([]);
+  // null while the parking registry / map lookups for the current destination are in flight.
+  const [parkingOptions, setParkingOptions] = useState<ParkingSpot[] | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [goId, setGoId] = useState<string | null>(null);
 
@@ -419,27 +420,26 @@ export default function MapScreen(): React.JSX.Element {
 
   // ---------- Destination, parking, routes ----------
 
-  const scan = useMemo(() => (destination ? scanParking(destination.coordinate, maxWalk) : null), [destination, maxWalk]);
-
   useEffect(() => {
-    setOsmSpots([]);
+    setParkingOptions(null);
     if (!destination) return;
     let alive = true;
-    fetchOsmParking(destination.coordinate)
-      .then((spots) => {
+    // Zone hours depend on when you get there: rough drive estimate at ~45 km/h over 1.35x the straight line.
+    const driveSeconds = (distanceMeters(userCoordRef.current, destination.coordinate) * 1.35) / 12.5;
+    loadParkingOptions(destination.coordinate, new Date(Date.now() + driveSeconds * 1000))
+      .then((options) => {
         // Late results must not swap the parking (and so the route) under a running trip.
-        if (alive && modeRef.current !== 'nav') setOsmSpots(spots);
+        if (alive && modeRef.current !== 'nav') setParkingOptions(options);
       })
-      .catch(() => undefined);
+      .catch(() => alive && setParkingOptions([]));
     return () => {
       alive = false;
     };
   }, [destination]);
 
-  const parking = useMemo(
-    () => (destination ? pickBestOsm(osmSpots, maxWalk) ?? scan?.best ?? null : null),
-    [destination, osmSpots, maxWalk, scan]
-  );
+  const scan = useMemo(() => (parkingOptions ? chooseParking(parkingOptions, maxWalk) : null), [parkingOptions, maxWalk]);
+  const parking = destination ? scan?.best ?? null : null;
+  const parkingLoading = !!destination && parkingOptions === null;
   const parkingRef = useRef(parking);
   parkingRef.current = parking;
 
@@ -745,7 +745,7 @@ export default function MapScreen(): React.JSX.Element {
       const hazard = await reportHazard(report);
       if (!mounted.current) return;
       setHazards((prev) => [hazard, ...prev.filter((x) => x.id !== hazard.id)]);
-      voice.say(`Report sent: ${hazard.title} on ${hazard.roadName}`);
+      voice.say(`Thanks, your ${hazardGlyph(hazard.category).label.toLowerCase()} report is live.`);
       // In nav the toast would cover the guidance banner; the voice line and new marker confirm it there.
       if (modeRef.current !== 'nav') setToast({ id: Date.now(), message: 'Thanks! Your report is live.' });
     } catch {
@@ -891,7 +891,7 @@ export default function MapScreen(): React.JSX.Element {
           nearestFree={scan?.nearestFree ?? null}
           routes={routes}
           selectedRouteId={selectedRoute?.id ?? null}
-          loading={routeState.loading}
+          loading={parkingLoading || routeState.loading}
           walk={walk}
           maxWalkMeters={maxWalk}
           onChangeMaxWalk={setMaxWalk}

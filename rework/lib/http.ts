@@ -9,17 +9,30 @@ export async function fetchJson<T = any>(
 ): Promise<T | null> {
   const { timeoutMs = 6000, headers, ...rest } = init;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // Abort alone isn't enough: an overloaded server that trickles its body can outlive the
+  // signal on some fetch implementations, so the timer also settles the result itself.
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(null);
+    }, timeoutMs);
+  });
+  const work = (async () => {
+    try {
+      const res = await fetch(url, {
+        ...rest,
+        headers: { Accept: 'application/json', 'User-Agent': USER_AGENT, ...(headers as object) },
+        signal: controller.signal,
+      });
+      if (!res.ok) return null;
+      return (await res.json()) as T;
+    } catch {
+      return null;
+    }
+  })();
   try {
-    const res = await fetch(url, {
-      ...rest,
-      headers: { Accept: 'application/json', 'User-Agent': USER_AGENT, ...(headers as object) },
-      signal: controller.signal,
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch {
-    return null;
+    return await Promise.race([work, deadline]);
   } finally {
     clearTimeout(timer);
   }

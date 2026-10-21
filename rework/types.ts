@@ -63,7 +63,7 @@ export interface ParkingSpot {
   polygon?: Coordinate[];
   stallLines?: [Coordinate, Coordinate][];
   capacity?: number;
-  source: 'estimate' | 'osm';
+  source: 'rdw' | 'osm';
 }
 
 export interface ParkingScan {

@@ -1,11 +1,11 @@
 // Apple Maps place card: title + category, Directions / Save tiles, then
 // nearby parking and details when the sheet is pulled up.
-import React, { useEffect, useMemo, useState } from 'react';
-import { ScrollView, Text, useWindowDimensions, View } from 'react-native';
-import type { Coordinate, Place } from '../types';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import type { Coordinate, ParkingSpot, Place } from '../types';
 import { text, useTheme } from '../theme';
 import { distanceMeters, formatDistance, formatDuration, walkMinutes } from '../lib/geo';
-import { scanParking } from '../services/parking';
+import { chooseParking, loadParkingOptions } from '../services/parking';
 import { poiCategoryFor } from '../services/places';
 import { parkingGlyph, poiGlyph } from './glyphs';
 import { ActionTile, CloseButton, GroupLabel, Hairline, IconBadge, InsetGroup, resolveColor, Row } from './ui';
@@ -62,13 +62,26 @@ export function PlaceCard({
   // A new pin while the card is open starts back at peek, like Apple Maps.
   useEffect(() => setIndex(0), [place.id]);
 
-  const { latitude, longitude } = place.coordinate;
-  const best = useMemo(() => scanParking({ latitude, longitude }, 500).best, [latitude, longitude]);
-
   const glyph = poiGlyph(place.poiCategory ?? poiCategoryFor(place.name));
   const where = place.city || place.subtitle;
   const away = distanceMeters(userLocation, place.coordinate);
-  const driveTime = formatDuration((away * ROAD_FACTOR) / (CITY_KMH / 3.6));
+  const driveSeconds = (away * ROAD_FACTOR) / (CITY_KMH / 3.6);
+  const driveTime = formatDuration(driveSeconds);
+
+  // Real parking (registry zones + map) for the time you'd get there; undefined while loading.
+  const { latitude, longitude } = place.coordinate;
+  const [best, setBest] = useState<ParkingSpot | null | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    setBest(undefined);
+    loadParkingOptions({ latitude, longitude }, new Date(Date.now() + driveSeconds * 1000))
+      .then((options) => alive && setBest(chooseParking(options, 500).best))
+      .catch(() => alive && setBest(null));
+    return () => {
+      alive = false;
+    };
+    // driveSeconds only tunes the arrival time; refetching as the user moves isn't worth it.
+  }, [latitude, longitude]);
 
   const header = (
     <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
@@ -113,6 +126,14 @@ export function PlaceCard({
       header={header}
     >
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+        {best === undefined && (
+          <>
+            <GroupLabel>Parking Nearby</GroupLabel>
+            <InsetGroup>
+              <Row leading={<ActivityIndicator />} title="Checking parking rules…" />
+            </InsetGroup>
+          </>
+        )}
         {best && bestGlyph && (
           <>
             <GroupLabel>Parking Nearby</GroupLabel>
@@ -120,7 +141,8 @@ export function PlaceCard({
               <Row
                 leading={<IconBadge icon={bestGlyph.icon} color={resolveColor(theme, bestGlyph.color)} />}
                 title={best.title}
-                subtitle={`${best.priceLabel} · ${formatDistance(best.distanceToDestMeters)} walk`}
+                subtitle={`${best.priceLabel} · ${formatDistance(best.distanceToDestMeters)} walk · ${best.rules}`}
+                numberOfLines={2}
               />
             </InsetGroup>
             <Text style={[text.footnote, { color: theme.secondaryLabel, marginHorizontal: 32, marginTop: 6 }]}>

@@ -11,9 +11,9 @@ import type {
   TravelPhase,
   TripState,
 } from '../types';
-import { cumulativeDistances, formatDistance, pointAlong } from '../lib/geo';
+import { cumulativeDistances, pointAlong } from '../lib/geo';
 import { speedAlert, upcomingCamera } from '../services/cameras';
-import { voice } from '../services/voice';
+import { spokenDistance, voice } from '../services/voice';
 
 const TICK_MS = 1000;
 // ponytail: 10x time-lapse so a demo trip finishes in minutes; set to 1 (or feed GPS) for real driving.
@@ -176,7 +176,7 @@ function announceDriving(t: TripState): void {
     // Reaching the parking gets its own announcement.
     if (m.kind !== 'arrive') voice.maneuver(`${m.instruction}${then}`, `${key}:now`);
   } else if (d <= Math.max(ANNOUNCE_AHEAD_METERS, nowWithin + step)) {
-    voice.maneuver(`In ${formatDistance(d)}, ${lowerFirst(m.instruction)}`, `${key}:ahead`);
+    voice.maneuver(`In ${spokenDistance(d)}, ${lowerFirst(m.instruction)}`, `${key}:ahead`);
   }
 }
 
@@ -229,9 +229,12 @@ export function useTripSimulation(opts: Options): {
     const maneuvers = route.maneuvers.map((m) => ({ ...m, atMeters: m.atMeters * k }));
     simRef.current = { route: { ...route, maneuvers }, drive, walk: walkLine(o, lastPoint(drive)), phase: 'driving', traveled: 0, speed: 0 };
     speedTestRef.current = -1;
-    voice.reset();
     const first = route.maneuvers[0];
-    if (first?.kind === 'depart') voice.maneuver(first.instruction, 'depart');
+    const sim = simRef.current;
+    // Wait for the natural voice to load so the first prompt isn't in the robotic default one.
+    voice.reset().then(() => {
+      if (simRef.current === sim && first?.kind === 'depart') voice.maneuver(first.instruction, 'depart');
+    });
     publish(true);
     o.onPhaseChange?.('driving');
 
@@ -248,7 +251,7 @@ export function useTripSimulation(opts: Options): {
         sim.traveled = 0;
         changed = 'walking';
         voice.say(
-          `You've arrived at ${parkingName(now)}. Walk ${formatDistance(sim.walk.total)} to ${destinationName(now)}.`
+          `You've reached ${parkingName(now)}. From here it's ${spokenDistance(sim.walk.total)} on foot to ${destinationName(now)}.`
         );
       } else if (sim.phase === 'walking' && sim.traveled >= sim.walk.total) {
         sim.phase = 'arrived';
@@ -256,7 +259,7 @@ export function useTripSimulation(opts: Options): {
         changed = 'arrived';
         clearInterval(id);
         running.current = false;
-        voice.say(`You have arrived at ${destinationName(now)}.`);
+        voice.say(`You've arrived at ${destinationName(now)}.`);
       }
 
       publish(changed === null);

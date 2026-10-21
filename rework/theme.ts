@@ -17,7 +17,7 @@ const light = {
   tertiaryFill: 'rgba(118,118,128,0.12)',
   // Sheet backing used where blur is unavailable (Android) or under the blur as a tint.
   sheet: 'rgba(242,242,247,0.97)',
-  sheetTint: 'rgba(255,255,255,0.35)',
+  sheetTint: 'rgba(255,255,255,0.72)', // readable even where the blur renders weakly (e.g. Expo Go)
   blurTint: 'systemThickMaterialLight' as BlurTint,
   controlBlurTint: 'systemMaterialLight' as BlurTint,
   blue: '#007AFF',
@@ -57,7 +57,7 @@ const dark: typeof light = {
   secondaryFill: 'rgba(120,120,128,0.32)',
   tertiaryFill: 'rgba(118,118,128,0.24)',
   sheet: 'rgba(28,28,30,0.97)',
-  sheetTint: 'rgba(28,28,30,0.35)',
+  sheetTint: 'rgba(28,28,30,0.8)',
   blurTint: 'systemThickMaterialDark',
   controlBlurTint: 'systemMaterialDark',
   blue: '#0A84FF',
