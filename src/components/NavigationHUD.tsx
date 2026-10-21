@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Platform, SafeAreaView } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Platform, SafeAreaView, Animated } from 'react-native';
 import { TurnManeuver, NavPhase, ParkingSpot, DestinationTarget, CameraWarning, SpeedAlert } from '../types/parking';
 
 interface NavigationHUDProps {
@@ -36,10 +36,41 @@ export const NavigationHUD: React.FC<NavigationHUDProps> = ({
   const isWayOver = speedAlert?.isWayOverLimit;
   const isOver = speedAlert?.isOverLimit;
 
+  const topSlide = useRef(new Animated.Value(-120)).current;
+  const topFade = useRef(new Animated.Value(0)).current;
+  const bottomSlide = useRef(new Animated.Value(140)).current;
+  const bottomFade = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(topSlide, { toValue: 0, tension: 70, friction: 9, useNativeDriver: true }),
+      Animated.timing(topFade, { toValue: 1, duration: 220, useNativeDriver: true }),
+      Animated.spring(bottomSlide, { toValue: 0, tension: 70, friction: 9, useNativeDriver: true }),
+      Animated.timing(bottomFade, { toValue: 1, duration: 220, useNativeDriver: true }),
+    ]).start();
+  }, []);
+
+  const handleEndNavigation = () => {
+    Animated.parallel([
+      Animated.timing(topSlide, { toValue: -120, duration: 180, useNativeDriver: true }),
+      Animated.timing(topFade, { toValue: 0, duration: 160, useNativeDriver: true }),
+      Animated.timing(bottomSlide, { toValue: 140, duration: 180, useNativeDriver: true }),
+      Animated.timing(bottomFade, { toValue: 0, duration: 160, useNativeDriver: true }),
+    ]).start(() => onEndNavigation());
+  };
+
   return (
     <SafeAreaView pointerEvents="box-none" style={styles.overlayWrapper}>
       {/* 1. Top Section: Turn-By-Turn Banner + Camera / Fine Alerts */}
-      <View style={styles.topAlertsContainer}>
+      <Animated.View
+        style={[
+          styles.topAlertsContainer,
+          {
+            opacity: topFade,
+            transform: [{ translateY: topSlide }],
+          },
+        ]}
+      >
         {/* Turn-By-Turn Navigation Header */}
         <View style={styles.tbtHeaderCard}>
           <View style={styles.tbtIconBubble}>
@@ -57,17 +88,6 @@ export const NavigationHUD: React.FC<NavigationHUDProps> = ({
         {/* 1B. FLITSER / SPEED CAMERA RADAR WARNING BANNER */}
         {cameraWarning && (
           <View style={[styles.cameraAlertCard, cameraWarning.isUrgent && styles.cameraAlertCardUrgent]}>
-            <View style={[styles.cameraAlertIconBubble, cameraWarning.isUrgent && styles.cameraAlertIconBubbleUrgent]}>
-              <Text style={styles.cameraAlertEmoji}>
-                {cameraWarning.camera.type === 'traject'
-                  ? '⏱️'
-                  : cameraWarning.camera.type === 'mobile'
-                  ? '🚓'
-                  : cameraWarning.camera.type === 'red_light'
-                  ? '🚦'
-                  : '📸'}
-              </Text>
-            </View>
             {cameraWarning.camera.type === 'mobile' && (
               <View style={[styles.cameraAlertIconBubble, cameraWarning.isUrgent && styles.cameraAlertIconBubbleUrgent]}>
                 <Text style={styles.cameraAlertEmoji}>🚓</Text>
@@ -79,11 +99,9 @@ export const NavigationHUD: React.FC<NavigationHUDProps> = ({
                   {cameraWarning.camera.type === 'traject'
                     ? 'TRAJECTCONTROLE'
                     : cameraWarning.camera.type === 'mobile'
-                    ? 'MOBIELE FLITSER'
                     ? 'POLITIECONTROLE'
                     : cameraWarning.camera.type === 'red_light'
                     ? 'FLITS- & ROODLICHT'
-                    : 'FLITSER GEMELD'}
                     : 'FLITSER'}
                 </Text>
                 <Text style={styles.cameraAlertDistance}>
@@ -97,7 +115,14 @@ export const NavigationHUD: React.FC<NavigationHUDProps> = ({
               </Text>
             </View>
             <View style={styles.cameraSignBox}>
-              <Text style={styles.cameraSignText}>{cameraWarning.camera.speedLimit}</Text>
+              <Text
+                style={[
+                  styles.cameraSignText,
+                  cameraWarning.camera.speedLimit >= 100 && styles.cameraSignText3Digit,
+                ]}
+              >
+                {cameraWarning.camera.speedLimit}
+              </Text>
             </View>
           </View>
         )}
@@ -116,7 +141,7 @@ export const NavigationHUD: React.FC<NavigationHUDProps> = ({
             </View>
           </View>
         )}
-      </View>
+      </Animated.View>
 
       {/* 2. Speedometer & Hazard Radar (Left Side) */}
       <View style={styles.speedRadarContainer}>
@@ -144,7 +169,14 @@ export const NavigationHUD: React.FC<NavigationHUDProps> = ({
 
         {/* Dutch Speed Limit Sign (Standard red-bordered traffic ring) */}
         <View style={styles.speedLimitSign}>
-          <Text style={styles.speedLimitText}>{speedLimit}</Text>
+          <Text
+            style={[
+              styles.speedLimitText,
+              speedLimit >= 100 && styles.speedLimitText3Digit,
+            ]}
+          >
+            {speedLimit}
+          </Text>
         </View>
 
         {/* Fine Estimate Pill or Radar Active Pill */}
@@ -174,7 +206,15 @@ export const NavigationHUD: React.FC<NavigationHUDProps> = ({
       </View>
 
       {/* 3. Bottom Trip HUD Bar */}
-      <View style={styles.bottomHUDCard}>
+      <Animated.View
+        style={[
+          styles.bottomHUDCard,
+          {
+            opacity: bottomFade,
+            transform: [{ translateY: bottomSlide }],
+          },
+        ]}
+      >
         <View style={styles.statsRow}>
           <View>
             <Text style={styles.etaText}>
@@ -205,13 +245,13 @@ export const NavigationHUD: React.FC<NavigationHUDProps> = ({
         {/* End Route Button */}
         <TouchableOpacity
           activeOpacity={0.85}
-          onPress={onEndNavigation}
+          onPress={handleEndNavigation}
           style={styles.endRouteBtn}
           accessibilityLabel="End navigation"
         >
           <Text style={styles.endRouteText}>✕ End Route</Text>
         </TouchableOpacity>
-      </View>
+      </Animated.View>
     </SafeAreaView>
   );
 };
@@ -340,9 +380,9 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   cameraSignBox: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: '#ffffff',
     borderWidth: 2.5,
     borderColor: '#dc2626',
@@ -351,9 +391,17 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   cameraSignText: {
-    fontSize: 11,
+    fontSize: 11.5,
     fontWeight: '900',
     color: '#000000',
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+    lineHeight: Platform.OS === 'ios' ? 13 : undefined,
+  },
+  cameraSignText3Digit: {
+    fontSize: 9.5,
+    letterSpacing: -0.6,
   },
   fineWarningCard: {
     backgroundColor: '#7f1d1d',
@@ -448,21 +496,29 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
   },
   speedLimitSign: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#ffffff',
     borderWidth: 3,
     borderColor: '#dc2626',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 8,
-    marginLeft: 12,
+    marginLeft: 11,
   },
   speedLimitText: {
-    fontSize: 13,
+    fontSize: 13.5,
     fontWeight: '900',
     color: '#000000',
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+    lineHeight: Platform.OS === 'ios' ? 15 : undefined,
+  },
+  speedLimitText3Digit: {
+    fontSize: 11,
+    letterSpacing: -0.6,
   },
   fineAmountPill: {
     flexDirection: 'row',

@@ -52,6 +52,120 @@ export const INITIAL_COMMUNITY_HAZARDS: RoadHazard[] = [
 ];
 
 /**
+ * In-memory cache for live fetched roadworks and closures
+ */
+const liveBlockadesCache = new Map<string, RoadHazard[]>();
+
+/**
+ * Fetches real-time road construction, roadworks, and physical road blockades
+ * from OpenStreetMap Overpass API within a radius around the driver.
+ */
+export async function fetchLiveRoadBlockades(
+  center: Coordinate,
+  radiusKm: number = 8
+): Promise<RoadHazard[]> {
+  const latDelta = radiusKm / 111.32;
+  const lonDelta = radiusKm / (111.32 * Math.cos((center.latitude * Math.PI) / 180));
+
+  const minLat = (center.latitude - latDelta).toFixed(3);
+  const maxLat = (center.latitude + latDelta).toFixed(3);
+  const minLon = (center.longitude - lonDelta).toFixed(3);
+  const maxLon = (center.longitude + lonDelta).toFixed(3);
+
+  const cacheKey = `${minLat}_${minLon}_${maxLat}_${maxLon}`;
+  if (liveBlockadesCache.has(cacheKey)) {
+    return liveBlockadesCache.get(cacheKey)!;
+  }
+
+  const query = `[out:json][timeout:10];
+(
+  way["highway"="construction"](${minLat},${minLon},${maxLat},${maxLon});
+  way["construction"](${minLat},${minLon},${maxLat},${maxLon});
+  node["barrier"="road_block"](${minLat},${minLon},${maxLat},${maxLon});
+);
+out center 35;`;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4500);
+
+    const res = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      body: 'data=' + encodeURIComponent(query.trim()),
+      headers: {
+        'User-Agent': 'SmartParkRadar/1.0 (road-safety-feed)',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      return [];
+    }
+
+    const data = await res.json();
+    if (!data.elements || !Array.isArray(data.elements)) {
+      return [];
+    }
+
+    const liveHazards: RoadHazard[] = [];
+
+    for (const el of data.elements) {
+      const lat = el.lat || el.center?.lat;
+      const lon = el.lon || el.center?.lon;
+      if (!lat || !lon) continue;
+
+      const tags = el.tags || {};
+      const isBlockade = tags.barrier === 'road_block' || tags.access === 'no';
+      const category: HazardCategory = isBlockade ? 'road_block' : 'road_work';
+
+      const streetName = tags.name || tags.description || tags['ref'] || 'Lokale rijbaan';
+      const title = isBlockade
+        ? `Wegafsluiting: ${streetName}`
+        : `Werkzaamheden: ${streetName}`;
+
+      liveHazards.push({
+        id: `osm-blockade-${el.id}`,
+        category,
+        title,
+        roadName: streetName,
+        coordinate: { latitude: lat, longitude: lon },
+        reportedAt: Date.now() - 1000 * 60 * 30, // active live feed
+        reporterLabel: 'OpenStreetMap Live',
+        confirmations: 8,
+        note: tags.description || tags.construction || 'Actueel gemeld op wegennet',
+      });
+    }
+
+    liveBlockadesCache.set(cacheKey, liveHazards);
+    return liveHazards;
+  } catch (error) {
+    // Graceful offline fallback
+    return [];
+  }
+}
+
+/**
+ * Returns merged hazards: local community/user reports + live Overpass blockades
+ */
+export async function getMergedHazards(center?: Coordinate): Promise<RoadHazard[]> {
+  const local = await getReportedHazards();
+  if (!center) return local;
+
+  try {
+    const live = await fetchLiveRoadBlockades(center);
+    // Deduplicate by ID
+    const localIds = new Set(local.map((h) => h.id));
+    const uniqueLive = live.filter((h) => !localIds.has(h.id));
+    return [...local, ...uniqueLive];
+  } catch {
+    return local;
+  }
+}
+
+/**
  * Loads all active community and user reported road hazards
  */
 export async function getReportedHazards(): Promise<RoadHazard[]> {
@@ -136,4 +250,5 @@ export async function removeHazard(id: string): Promise<RoadHazard[]> {
     return [];
   }
 }
+
 

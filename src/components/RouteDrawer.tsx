@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Platform, SafeAreaView, ScrollView } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Platform, SafeAreaView, ScrollView, Animated } from 'react-native';
 import { DestinationTarget, ParkingSpot, DriveRouteOption } from '../types/parking';
 
 interface RouteDrawerProps {
@@ -7,7 +7,10 @@ interface RouteDrawerProps {
   optimalSpot: ParkingSpot;
   selectedRoute: DriveRouteOption | null;
   availableRoutes: DriveRouteOption[];
+  maxWalkingDistance?: number;
+  nearestFreeSpot?: ParkingSpot | null;
   onSelectRoute: (route: DriveRouteOption) => void;
+  onSelectMaxWalkingDistance?: (dist: number) => void;
   onStartNavigation: () => void;
   onCancel: () => void;
 }
@@ -17,28 +20,129 @@ export const RouteDrawer: React.FC<RouteDrawerProps> = ({
   optimalSpot,
   selectedRoute,
   availableRoutes,
+  maxWalkingDistance = 500,
+  nearestFreeSpot,
   onSelectRoute,
+  onSelectMaxWalkingDistance,
   onStartNavigation,
   onCancel,
 }) => {
+  const slideAnim = useRef(new Animated.Value(320)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        tension: 65,
+        friction: 9,
+        useNativeDriver: true,
+      }),
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+  const handleCancelPress = () => {
+    Animated.parallel([
+      Animated.timing(slideAnim, {
+        toValue: 320,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+    ]).start(() => onCancel());
+  };
+
   const driveMinutes = selectedRoute?.durationMinutes || 0;
   const driveKm = selectedRoute?.distanceKm || '0 km';
   const traffic = selectedRoute?.traffic;
+  const isFree = optimalSpot.pricePerHour === 0 || optimalSpot.type === 'free';
+  const isGarage = optimalSpot.facilityType === 'garage';
+  const isLot = optimalSpot.facilityType === 'lot';
 
   return (
     <SafeAreaView pointerEvents="box-none" style={styles.container}>
-      <View style={styles.card}>
+      <Animated.View
+        style={[
+          styles.card,
+          {
+            opacity: fadeAnim,
+            transform: [{ translateY: slideAnim }],
+          },
+        ]}
+      >
         <View style={styles.handle} />
 
-        {/* Free / Cheapest Match Banner */}
-        <View style={styles.matchBanner}>
-          <Text style={styles.matchIcon}>✨</Text>
-          <Text style={styles.matchText}>
-            {optimalSpot.pricePerHour === 0
-              ? `Found 100% Free Parking ${optimalSpot.distanceToDestMeters}m from ${destination.name}!`
-              : `Cheapest Parking: ${optimalSpot.label} (${optimalSpot.distanceToDestMeters}m walk)`}
+        {/* Free / Nearest Facility Match Banner */}
+        <View style={[styles.matchBanner, isFree ? styles.matchBannerFree : styles.matchBannerPaid]}>
+          <Text style={styles.matchIcon}>
+            {isFree ? '✨' : isGarage ? '🏢' : isLot ? '🅿️' : '📍'}
+          </Text>
+          <Text style={[styles.matchText, isFree ? styles.matchTextFree : styles.matchTextPaid]}>
+            {isFree
+              ? `Gevonden: 100% Gratis ${isGarage ? 'Parkeergarage' : isLot ? 'Parkeerterrein' : 'Parkeren'} (${optimalSpot.distanceToDestMeters}m lopen)!`
+              : `Dichtstbijzijnde ${isGarage ? 'Parkeergarage' : isLot ? 'Parkeerterrein' : 'Parkeerplek'}: ${optimalSpot.label} (${optimalSpot.distanceToDestMeters}m lopen)`}
           </Text>
         </View>
+
+        {/* Walking Distance Preference Selector */}
+        <View style={styles.walkingSelectorContainer}>
+          <View style={styles.walkingHeaderRow}>
+            <Text style={styles.walkingSelectorTitle}>🚶 Maximaal Lopen</Text>
+            <Text style={styles.walkingSelectorValue}>
+              {maxWalkingDistance >= 1000 ? `${(maxWalkingDistance / 1000).toFixed(1)} km` : `${maxWalkingDistance}m`}
+              {maxWalkingDistance <= 300 ? ' · Direct erbij' : maxWalkingDistance <= 600 ? ' · Comfortabel' : ' · Verder'}
+            </Text>
+          </View>
+
+          <View style={styles.walkingChipsRow}>
+            {[250, 500, 750, 1200].map((dist) => {
+              const isSelected = maxWalkingDistance === dist;
+              const label = dist === 250 ? '⚡ 250m' : dist === 500 ? '🚶 500m' : dist === 750 ? '👟 750m' : '🚴 1.2km';
+              const sub = dist === 250 ? '~3 min' : dist === 500 ? '~6 min' : dist === 750 ? '~10 min' : '~15 min';
+
+              return (
+                <TouchableOpacity
+                  key={dist}
+                  activeOpacity={0.8}
+                  onPress={() => onSelectMaxWalkingDistance?.(dist)}
+                  style={[styles.walkingChip, isSelected && styles.walkingChipSelected]}
+                >
+                  <Text style={[styles.walkingChipText, isSelected && styles.walkingChipTextSelected]}>
+                    {label}
+                  </Text>
+                  <Text style={[styles.walkingChipSub, isSelected && styles.walkingChipSubSelected]}>
+                    {sub}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
+        {/* Suggestion pill if chosen spot is paid because free spot is outside chosen walking range */}
+        {!isFree && nearestFreeSpot && nearestFreeSpot.distanceToDestMeters > maxWalkingDistance && (
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => {
+              const target = nearestFreeSpot.distanceToDestMeters <= 500 ? 500 : nearestFreeSpot.distanceToDestMeters <= 750 ? 750 : 1200;
+              onSelectMaxWalkingDistance?.(target);
+            }}
+            style={styles.freeFurtherPill}
+          >
+            <Text style={styles.freeFurtherText}>
+              💡 Gratis parkeren ligt op {nearestFreeSpot.distanceToDestMeters}m · Tik hier om loopafstand te verhogen
+            </Text>
+          </TouchableOpacity>
+        )}
 
         {/* Live Traffic Efficiency Pill */}
         {traffic && (
@@ -149,13 +253,13 @@ export const RouteDrawer: React.FC<RouteDrawerProps> = ({
 
           <TouchableOpacity
             activeOpacity={0.8}
-            onPress={onCancel}
+            onPress={handleCancelPress}
             style={styles.cancelBtn}
           >
             <Text style={styles.cancelBtnText}>Cancel</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </Animated.View>
     </SafeAreaView>
   );
 };
@@ -194,13 +298,19 @@ const styles = StyleSheet.create({
   matchBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#eff6ff',
     paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingVertical: 7,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#bfdbfe',
     marginBottom: 6,
+  },
+  matchBannerFree: {
+    backgroundColor: '#ecfdf5',
+    borderColor: '#a7f3d0',
+  },
+  matchBannerPaid: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#bfdbfe',
   },
   matchIcon: {
     fontSize: 13,
@@ -209,8 +319,87 @@ const styles = StyleSheet.create({
   matchText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#1e40af',
     flex: 1,
+  },
+  matchTextFree: {
+    color: '#065f46',
+  },
+  matchTextPaid: {
+    color: '#1e40af',
+  },
+  walkingSelectorContainer: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  walkingHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  walkingSelectorTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#1e293b',
+  },
+  walkingSelectorValue: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#2563eb',
+  },
+  walkingChipsRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  walkingChip: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    paddingVertical: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  walkingChipSelected: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#2563eb',
+  },
+  walkingChipText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#475569',
+  },
+  walkingChipTextSelected: {
+    color: '#1d4ed8',
+  },
+  walkingChipSub: {
+    fontSize: 8,
+    fontWeight: '600',
+    color: '#94a3b8',
+    marginTop: 1,
+  },
+  walkingChipSubSelected: {
+    color: '#3b82f6',
+  },
+  freeFurtherPill: {
+    backgroundColor: '#ecfdf5',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+  },
+  freeFurtherText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#065f46',
   },
   trafficRow: {
     flexDirection: 'row',

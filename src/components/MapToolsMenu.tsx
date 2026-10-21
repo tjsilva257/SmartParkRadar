@@ -1,80 +1,173 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import React, { useState, useRef, useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, Animated } from 'react-native';
 import { MapType } from 'react-native-maps';
 import { CameraDisplayMode } from '../types/parking';
 
 interface MapToolsMenuProps {
+  visible?: boolean;
   mapType: MapType;
   showTraffic: boolean;
   showScratchMap?: boolean;
   cameraDisplayMode?: CameraDisplayMode;
+  isLiveFeedActive?: boolean;
+  activeIconCount?: number;
   onToggleMapType: () => void;
   onToggleTraffic: () => void;
   onToggleScratchMap?: () => void;
   onCycleCameraDisplayMode?: () => void;
+  onOpenIconFilters?: () => void;
   onOpenHazardReport?: () => void;
   onOpenMemeShake?: () => void;
+  onRefreshLiveFeed?: () => void;
   onRecenter: () => void;
   bottomOffset?: number;
 }
 
 export const MapToolsMenu: React.FC<MapToolsMenuProps> = ({
+  visible = true,
   mapType,
   showTraffic,
   showScratchMap = false,
   cameraDisplayMode = 'always',
+  isLiveFeedActive = false,
+  activeIconCount,
   onToggleMapType,
   onToggleTraffic,
   onToggleScratchMap,
   onCycleCameraDisplayMode,
+  onOpenIconFilters,
   onOpenHazardReport,
   onOpenMemeShake,
+  onRefreshLiveFeed,
   onRecenter,
   bottomOffset = 40,
 }) => {
+  if (!visible) return null;
+
   const [isOpen, setIsOpen] = useState(false);
+  const [isMenuRendered, setIsMenuRendered] = useState(false);
+
+  // Smooth entrance for floating controls
+  const rootFade = useRef(new Animated.Value(0)).current;
+  const rootScale = useRef(new Animated.Value(0.85)).current;
+
+  // Popover menu animation values
+  const menuFade = useRef(new Animated.Value(0)).current;
+  const menuScale = useRef(new Animated.Value(0.88)).current;
+  const menuTranslateY = useRef(new Animated.Value(12)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(rootFade, { toValue: 1, duration: 220, useNativeDriver: true }),
+      Animated.spring(rootScale, { toValue: 1, tension: 75, friction: 8, useNativeDriver: true }),
+    ]).start();
+  }, []);
+
+  const openMenu = () => {
+    setIsMenuRendered(true);
+    setIsOpen(true);
+    Animated.parallel([
+      Animated.timing(menuFade, { toValue: 1, duration: 180, useNativeDriver: true }),
+      Animated.spring(menuScale, { toValue: 1, tension: 80, friction: 8, useNativeDriver: true }),
+      Animated.spring(menuTranslateY, { toValue: 0, tension: 80, friction: 8, useNativeDriver: true }),
+    ]).start();
+  };
+
+  const closeMenu = (onFinished?: () => void) => {
+    Animated.parallel([
+      Animated.timing(menuFade, { toValue: 0, duration: 150, useNativeDriver: true }),
+      Animated.timing(menuScale, { toValue: 0.9, duration: 150, useNativeDriver: true }),
+      Animated.timing(menuTranslateY, { toValue: 8, duration: 150, useNativeDriver: true }),
+    ]).start(() => {
+      setIsOpen(false);
+      setIsMenuRendered(false);
+      onFinished?.();
+    });
+  };
+
+  const toggleMenu = () => {
+    if (isOpen) {
+      closeMenu();
+    } else {
+      openMenu();
+    }
+  };
 
   const handleReportHazard = () => {
-    setIsOpen(false);
-    if (onOpenHazardReport) {
-      onOpenHazardReport();
-      return;
-    }
-    Alert.alert(
-      '⚠️ Report Parking Hazard',
-      'Select a hazard to broadcast in real time to nearby drivers:',
-      [
-        {
-          text: '👮 Parking Warden (Scan-auto / Handhaving)',
-          onPress: () => Alert.alert('Reported', 'Hazard alert broadcasted to live feed.'),
-        },
-        {
-          text: '🅿️ Full Blue Zone (No spots left)',
-          onPress: () => Alert.alert('Reported', 'Blue zone marked 100% full.'),
-        },
-        {
-          text: '🚧 Road Closure / Work',
-          onPress: () => Alert.alert('Reported', 'Road blocked alert sent.'),
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ],
-      { cancelable: true }
-    );
+    closeMenu(() => {
+      if (onOpenHazardReport) {
+        onOpenHazardReport();
+        return;
+      }
+      Alert.alert(
+        '⚠️ Report Parking Hazard',
+        'Select a hazard to broadcast in real time to nearby drivers:',
+        [
+          {
+            text: '👮 Parking Warden (Scan-auto / Handhaving)',
+            onPress: () => Alert.alert('Reported', 'Hazard alert broadcasted to live feed.'),
+          },
+          {
+            text: '🅿️ Full Blue Zone (No spots left)',
+            onPress: () => Alert.alert('Reported', 'Blue zone marked 100% full.'),
+          },
+          {
+            text: '🚧 Road Closure / Work',
+            onPress: () => Alert.alert('Reported', 'Road blocked alert sent.'),
+          },
+          { text: 'Cancel', style: 'cancel' },
+        ],
+        { cancelable: true }
+      );
+    });
   };
 
   return (
-    <View
+    <Animated.View
       pointerEvents="box-none"
-      style={[styles.container, { bottom: bottomOffset }]}
+      style={[
+        styles.container,
+        {
+          bottom: bottomOffset,
+          opacity: rootFade,
+          transform: [{ scale: rootScale }],
+        },
+      ]}
     >
-      {/* Popover Menu Card */}
-      {isOpen && (
-        <View style={styles.menuCard}>
+      {/* Popover Menu Card with smooth scale & slide */}
+      {isMenuRendered && (
+        <Animated.View
+          style={[
+            styles.menuCard,
+            {
+              opacity: menuFade,
+              transform: [{ scale: menuScale }, { translateY: menuTranslateY }],
+            },
+          ]}
+        >
           <View style={styles.menuHeader}>
             <Text style={styles.menuHeaderTitle}>MAP TOOLS & ACTIONS</Text>
-            <TouchableOpacity onPress={() => setIsOpen(false)}>
+            <TouchableOpacity onPress={() => closeMenu()}>
               <Text style={styles.menuHeaderClose}>✕</Text>
             </TouchableOpacity>
+          </View>
+
+          {/* Live Data Network Status Banner */}
+          <View style={styles.liveFeedBanner}>
+            <View style={[styles.liveFeedPulseDot, isLiveFeedActive && styles.liveFeedPulseDotActive]} />
+            <View style={styles.liveFeedTextCol}>
+              <Text style={styles.liveFeedTitle}>LIVE OVERHEID & DATA FEEDS</Text>
+              <Text style={styles.liveFeedSub}>
+                {isLiveFeedActive
+                  ? 'Verbonden met PDOK RWS & OpenStreetMap'
+                  : 'Lokale database actief (offline gereed)'}
+              </Text>
+            </View>
+            {onRefreshLiveFeed && (
+              <TouchableOpacity onPress={onRefreshLiveFeed} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={styles.liveFeedRefreshText}>🔄</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* Action 1: Report Hazard */}
@@ -178,7 +271,32 @@ export const MapToolsMenu: React.FC<MapToolsMenuProps> = ({
             </TouchableOpacity>
           )}
 
-          {/* Action 5: Speed Camera Icons on Road Mode */}
+          {/* Action 5: Kaart Iconen & Filters (Kies welke iconen zichtbaar zijn) */}
+          {onOpenIconFilters && (
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => {
+                setIsOpen(false);
+                onOpenIconFilters();
+              }}
+              style={styles.menuItem}
+            >
+              <View style={[styles.iconBubble, { backgroundColor: '#e0f2fe' }]}>
+                <Text style={styles.itemIcon}>👁️</Text>
+              </View>
+              <View style={styles.textCol}>
+                <Text style={styles.itemTitle}>Kaart Iconen & Filters</Text>
+                <Text style={styles.itemSub}>Kies welke iconen zichtbaar zijn</Text>
+              </View>
+              <View style={[styles.badge, styles.badgeOn]}>
+                <Text style={[styles.badgeText, styles.badgeTextOn]}>
+                  {activeIconCount !== undefined ? `${activeIconCount}/7` : 'KIES'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {/* Action 6: Speed Camera Icons on Road Mode */}
           {onCycleCameraDisplayMode && (
             <TouchableOpacity
               activeOpacity={0.8}
@@ -247,20 +365,20 @@ export const MapToolsMenu: React.FC<MapToolsMenuProps> = ({
               </View>
               <View style={styles.textCol}>
                 <Text style={styles.itemTitle}>6 & 7 Shake Meme</Text>
-                <Text style={styles.itemSub}>Of schud je scherm/telefoon!</Text>
+                <Text style={styles.itemSub}>Of typ '6-7' in de zoekbalk!</Text>
               </View>
               <View style={[styles.badge, styles.badgeTrip]}>
                 <Text style={[styles.badgeText, styles.badgeTextTrip]}>MEME</Text>
               </View>
             </TouchableOpacity>
           )}
-        </View>
+        </Animated.View>
       )}
 
       {/* Button 1: Tools Menu Trigger Button */}
       <TouchableOpacity
         activeOpacity={0.85}
-        onPress={() => setIsOpen(!isOpen)}
+        onPress={toggleMenu}
         style={[styles.floatingBtn, isOpen && styles.floatingBtnActive]}
         accessibilityLabel="Open Map Tools Menu"
       >
@@ -276,7 +394,7 @@ export const MapToolsMenu: React.FC<MapToolsMenuProps> = ({
       >
         <Text style={styles.btnIcon}>🎯</Text>
       </TouchableOpacity>
-    </View>
+    </Animated.View>
   );
 };
 
@@ -417,6 +535,50 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '900',
     color: '#0f172a',
+  },
+  liveFeedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0f172a',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  liveFeedPulseDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#94a3b8',
+    marginRight: 10,
+  },
+  liveFeedPulseDotActive: {
+    backgroundColor: '#22c55e',
+    shadowColor: '#22c55e',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  liveFeedTextCol: {
+    flex: 1,
+  },
+  liveFeedTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#f8fafc',
+    letterSpacing: 0.5,
+  },
+  liveFeedSub: {
+    fontSize: 10,
+    color: '#94a3b8',
+    marginTop: 1,
+  },
+  liveFeedRefreshText: {
+    fontSize: 14,
+    marginLeft: 8,
   },
 });
 

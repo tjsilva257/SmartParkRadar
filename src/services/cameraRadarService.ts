@@ -206,16 +206,137 @@ export function calculateSpeedFine(currentSpeed: number, speedLimit: number): Sp
   };
 }
 
+// In-memory cache for live fetched cameras by geographic grid key
+const liveCamerasCache = new Map<string, SpeedCamera[]>();
+
 /**
- * Scans for speed cameras within a detection radar radius (default 3km).
+ * Fetches live speed cameras, trajectcontroles, and police locations from OpenStreetMap Overpass API.
+ * Includes automatic caching and deduplication against built-in SPEED_CAMERAS.
+ */
+export async function fetchLiveOverpassCameras(
+  center: Coordinate,
+  radiusKm: number = 10
+): Promise<SpeedCamera[]> {
+  const latDelta = radiusKm / 111.32;
+  const lonDelta = radiusKm / (111.32 * Math.cos((center.latitude * Math.PI) / 180));
+
+  const minLat = (center.latitude - latDelta).toFixed(3);
+  const maxLat = (center.latitude + latDelta).toFixed(3);
+  const minLon = (center.longitude - lonDelta).toFixed(3);
+  const maxLon = (center.longitude + lonDelta).toFixed(3);
+
+  const cacheKey = `${minLat}_${minLon}_${maxLat}_${maxLon}`;
+  if (liveCamerasCache.has(cacheKey)) {
+    return liveCamerasCache.get(cacheKey)!;
+  }
+
+  const query = `[out:json][timeout:10];
+(
+  node["highway"="speed_camera"](${minLat},${minLon},${maxLat},${maxLon});
+  node["enforcement"="maxspeed"](${minLat},${minLon},${maxLat},${maxLon});
+  node["amenity"="police"](${minLat},${minLon},${maxLat},${maxLon});
+);
+out body 50;`;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4500);
+
+    const res = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      body: 'data=' + encodeURIComponent(query.trim()),
+      headers: {
+        'User-Agent': 'SmartParkRadar/1.0 (live-safety-feed)',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      return [];
+    }
+
+    const data = await res.json();
+    if (!data.elements || !Array.isArray(data.elements)) {
+      return [];
+    }
+
+    const fetchedCameras: SpeedCamera[] = [];
+
+    for (const el of data.elements) {
+      if (!el.lat || !el.lon) continue;
+
+      const coord: Coordinate = { latitude: el.lat, longitude: el.lon };
+
+      // Deduplicate against static built-in cameras within 60 meters
+      const isDuplicate = SPEED_CAMERAS.some(
+        (c) => getDistanceInMeters(c.coordinate.latitude, c.coordinate.longitude, coord.latitude, coord.longitude) < 60
+      );
+      if (isDuplicate) continue;
+
+      const tags = el.tags || {};
+      const isPolice = tags.amenity === 'police';
+      const isSpeedCam = tags.highway === 'speed_camera' || tags.enforcement === 'maxspeed';
+
+      if (isSpeedCam) {
+        let speed = parseInt(tags.maxspeed || tags['maxspeed:practical'] || '50', 10);
+        if (isNaN(speed) || speed <= 0) speed = 50;
+
+        let type: SpeedCamera['type'] = 'fixed';
+        const camType = tags['camera:type'] || '';
+        if (camType === 'distance' || tags.enforcement === 'average_speed') {
+          type = 'traject';
+        } else if (camType === 'red_light' || tags.red_light === 'yes') {
+          type = 'red_light';
+        }
+
+        const street = tags.street || tags['addr:street'] || tags['ref'] || 'Lokale weg';
+        fetchedCameras.push({
+          id: `osm-cam-${el.id}`,
+          name: tags.name || (type === 'traject' ? `Trajectcontrole ${speed}` : `Flitspaal ${speed}`),
+          road: street,
+          type,
+          speedLimit: speed,
+          coordinate: coord,
+          description: tags.description || `Live OpenStreetMap flitser (${speed} km/u)`,
+        });
+      } else if (isPolice) {
+        const name = tags.name || 'Politiepost / Controle';
+        const street = tags['addr:street'] || tags.street || 'Politielocatie';
+        fetchedCameras.push({
+          id: `osm-police-${el.id}`,
+          name,
+          road: street,
+          type: 'mobile',
+          speedLimit: 50,
+          coordinate: coord,
+          description: tags['operator'] || 'Officiële politielocatie / Controlepost',
+        });
+      }
+    }
+
+    liveCamerasCache.set(cacheKey, fetchedCameras);
+    return fetchedCameras;
+  } catch (error) {
+    // Graceful offline fallback
+    return [];
+  }
+}
+
+/**
+ * Scans for speed cameras within a detection radar radius (default 3.5km).
+ * Accepts an optional cameraList (allowing live Overpass cameras to be included).
  */
 export function getNearbyCameras(
   position: Coordinate,
-  radiusMeters: number = 3500
+  radiusMeters: number = 3500,
+  cameraList: SpeedCamera[] = SPEED_CAMERAS
 ): { camera: SpeedCamera; distanceMeters: number }[] {
   const results: { camera: SpeedCamera; distanceMeters: number }[] = [];
 
-  for (const cam of SPEED_CAMERAS) {
+  for (const cam of cameraList) {
     const dist = getDistanceInMeters(
       position.latitude,
       position.longitude,
@@ -233,12 +354,14 @@ export function getNearbyCameras(
 
 /**
  * Finds the immediate upcoming camera ahead on the road within radar warning distance (1200m).
+ * Accepts an optional cameraList for live updates.
  */
 export function getUpcomingCameraWarning(
   position: Coordinate,
-  radarRadiusMeters: number = 1200
+  radarRadiusMeters: number = 1200,
+  cameraList: SpeedCamera[] = SPEED_CAMERAS
 ): CameraWarning | null {
-  const nearby = getNearbyCameras(position, radarRadiusMeters);
+  const nearby = getNearbyCameras(position, radarRadiusMeters, cameraList);
   if (nearby.length === 0) return null;
 
   const closest = nearby[0];
@@ -248,3 +371,4 @@ export function getUpcomingCameraWarning(
     isUrgent: closest.distanceMeters <= 450,
   };
 }
+

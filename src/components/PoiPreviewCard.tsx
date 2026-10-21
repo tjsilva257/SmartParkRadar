@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Platform, Animated } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { DestinationTarget, Coordinate } from '../types/parking';
 import { detectPoiCategory, getPlaceDistanceInfo } from '../services/placesService';
@@ -23,11 +23,85 @@ export const PoiPreviewCard: React.FC<PoiPreviewCardProps> = ({
 }) => {
   if (!place) return null;
 
+  const slideAnim = useRef(new Animated.Value(160)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(0.94)).current;
+  const navBtnScale = useRef(new Animated.Value(1)).current;
+  const iconPop = useRef(new Animated.Value(0.3)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        tension: 65,
+        friction: 9,
+        useNativeDriver: true,
+      }),
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 250,
+        useNativeDriver: true,
+      }),
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        tension: 70,
+        friction: 8,
+        useNativeDriver: true,
+      }),
+      Animated.sequence([
+        Animated.delay(100),
+        Animated.spring(iconPop, {
+          toValue: 1,
+          tension: 130,
+          friction: 6,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start();
+  }, []);
+
+  const handleDismiss = () => {
+    Animated.parallel([
+      Animated.timing(slideAnim, {
+        toValue: 160,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+      Animated.timing(scaleAnim, {
+        toValue: 0.94,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+    ]).start(() => onClose());
+  };
+
+  const handleNavigatePress = () => {
+    Animated.sequence([
+      Animated.timing(navBtnScale, { toValue: 0.95, duration: 80, useNativeDriver: true }),
+      Animated.spring(navBtnScale, { toValue: 1, friction: 5, useNativeDriver: true }),
+    ]).start(() => {
+      onNavigate(place);
+    });
+  };
+
   const categoryInfo = detectPoiCategory(place.name);
   const distanceInfo = getPlaceDistanceInfo(userLocation, place.coordinate);
 
   return (
-    <View style={styles.container}>
+    <Animated.View
+      style={[
+        styles.container,
+        {
+          opacity: fadeAnim,
+          transform: [{ translateY: slideAnim }, { scale: scaleAnim }],
+        },
+      ]}
+    >
       {/* Apple Liquid Glass Frosted Blur Layer */}
       <BlurView
         intensity={Platform.OS === 'ios' ? 88 : 98}
@@ -39,9 +113,9 @@ export const PoiPreviewCard: React.FC<PoiPreviewCardProps> = ({
 
       {/* Top Details Row */}
       <View style={styles.topRow}>
-        <View style={styles.iconBubble}>
+        <Animated.View style={[styles.iconBubble, { transform: [{ scale: iconPop }] }]}>
           <Text style={styles.emojiText}>{categoryInfo.emoji}</Text>
-        </View>
+        </Animated.View>
 
         <View style={styles.textCol}>
           <View style={styles.titleRow}>
@@ -62,20 +136,22 @@ export const PoiPreviewCard: React.FC<PoiPreviewCardProps> = ({
           </Text>
         </View>
 
-        <TouchableOpacity onPress={onClose} style={styles.closeBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <TouchableOpacity onPress={handleDismiss} style={styles.closeBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
           <Text style={styles.closeBtnText}>✕</Text>
         </TouchableOpacity>
       </View>
 
       {/* Action Buttons Row */}
       <View style={styles.actionsRow}>
-        <TouchableOpacity
-          activeOpacity={0.85}
-          onPress={() => onNavigate(place)}
-          style={styles.navigateBtn}
-        >
-          <Text style={styles.navigateBtnText}>🚗 Ga hierheen & Scan Parkeren</Text>
-        </TouchableOpacity>
+        <Animated.View style={{ flex: 1, transform: [{ scale: navBtnScale }] }}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={handleNavigatePress}
+            style={styles.navigateBtn}
+          >
+            <Text style={styles.navigateBtnText}>🚗 Ga hierheen & Scan Parkeren</Text>
+          </TouchableOpacity>
+        </Animated.View>
 
         <TouchableOpacity
           activeOpacity={0.75}
@@ -87,14 +163,14 @@ export const PoiPreviewCard: React.FC<PoiPreviewCardProps> = ({
           </Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </Animated.View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    bottom: 96,
+    bottom: Platform.OS === 'ios' ? 34 : 20,
     left: 14,
     right: 14,
     borderRadius: 24,
@@ -188,17 +264,17 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   closeBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(100, 116, 139, 0.14)',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(100, 116, 139, 0.16)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   closeBtnText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '800',
-    color: '#475569',
+    color: '#334155',
   },
   actionsRow: {
     flexDirection: 'row',

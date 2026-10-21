@@ -154,7 +154,7 @@ export const MemeShakeModal: React.FC<MemeShakeModalProps> = ({ visible, onClose
           <View style={styles.bannerBadge}>
             <Text style={styles.bannerEmoji}>🚨 💥 📱 💥 🚨</Text>
             <Text style={styles.bannerTitle}>6 & 7 SHAKING MEME</Text>
-            <Text style={styles.bannerSubtitle}>POV: Je hebt je scherm geschud!</Text>
+            <Text style={styles.bannerSubtitle}>POV: Je hebt '6-7' in de zoekbalk gezocht!</Text>
           </View>
 
           {/* Shaking Meme Characters Row */}

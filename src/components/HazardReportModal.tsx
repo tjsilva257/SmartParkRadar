@@ -17,6 +17,8 @@ import {
   POPULAR_HIGHWAY_CODES,
   interpolateHectometerCoordinate,
   detectNearbyHectometerPost,
+  resolveHectometerWithPDOK,
+  detectNearbyHectometerPostWithPDOK,
   formatHectometerLabel,
   DUTCH_HIGHWAYS,
 } from '../services/hectometerService';
@@ -46,7 +48,8 @@ const CATEGORIES: {
   { category: 'mobile_camera', emoji: '🚓', label: 'Politiecontrole / Laser', sub: 'Mobiele inspectie / Flitser' },
   { category: 'parking_warden', emoji: '👮', label: 'Handhaving', sub: 'Scan-auto / Parkeerwachter' },
   { category: 'accident', emoji: '🚗', label: 'Ongeval / Pech', sub: 'Stilstaand voertuig op rijbaan' },
-  { category: 'road_work', emoji: '🚧', label: 'Werkzaamheden', sub: 'Wegafsluiting / Pionnen' },
+  { category: 'road_block', emoji: '⛔', label: 'Wegafsluiting', sub: 'Rijbaan geblokkeerd / Barrière' },
+  { category: 'road_work', emoji: '🚧', label: 'Werkzaamheden', sub: 'Wegwerkzaamheden / Pionnen' },
   { category: 'debris', emoji: '⚠️', label: 'Gevaar op de weg', sub: 'Voorwerp / Losliggend puin' },
   { category: 'traffic_jam', emoji: '🚙', label: 'File / Spookfile', sub: 'Plotselinge vertraging' },
 ];
@@ -77,27 +80,43 @@ export const HazardReportModal: React.FC<HazardReportModalProps> = ({
 
   // Attempt auto-detecting nearest highway when modal opens
   useEffect(() => {
+    let isMounted = true;
     if (visible && userLocation) {
-      const detected = detectNearbyHectometerPost(userLocation);
-      if (detected) {
-        setRoadCode(detected.road);
-        setHectometer(detected.hectometer);
-        setCarriageway(detected.carriageway);
-        setDetectedHighwayNotice(`📍 Nabij ${detected.road} ${detected.carriageway} ${detected.hectometer} (${detected.distanceMeters}m)`);
+      // Local immediate detection first for zero delay
+      const local = detectNearbyHectometerPost(userLocation);
+      if (local) {
+        setRoadCode(local.road);
+        setHectometer(local.hectometer);
+        setCarriageway(local.carriageway);
+        setDetectedHighwayNotice(`📍 Nabij ${local.road} ${local.carriageway} ${local.hectometer} (${local.distanceMeters}m)`);
         setLocationMode('highway');
       } else {
         setDetectedHighwayNotice(null);
       }
+
+      // Live PDOK Rijkswaterstaat refinement in background
+      detectNearbyHectometerPostWithPDOK(userLocation).then((pdokMatch) => {
+        if (isMounted && pdokMatch) {
+          setRoadCode(pdokMatch.road);
+          setHectometer(pdokMatch.hectometer);
+          setCarriageway(pdokMatch.carriageway);
+          setDetectedHighwayNotice(`📍 PDOK Wegenbestand: ${pdokMatch.road} ${pdokMatch.carriageway} ${pdokMatch.hectometer} (${pdokMatch.distanceMeters}m)`);
+          setLocationMode('highway');
+        }
+      });
     }
+    return () => {
+      isMounted = false;
+    };
   }, [visible, userLocation]);
 
-  const handleAutoDetectHectometer = () => {
-    const detected = detectNearbyHectometerPost(userLocation);
+  const handleAutoDetectHectometer = async () => {
+    const detected = await detectNearbyHectometerPostWithPDOK(userLocation);
     if (detected) {
       setRoadCode(detected.road);
       setHectometer(detected.hectometer);
       setCarriageway(detected.carriageway);
-      setDetectedHighwayNotice(`✅ Automatisch gesnapt: ${detected.road} ${detected.carriageway} ${detected.hectometer}`);
+      setDetectedHighwayNotice(`✅ PDOK Wegenbestand gesnapt: ${detected.road} ${detected.carriageway} ${detected.hectometer}`);
     } else {
       Alert.alert(
         'Geen snelweg gedetecteerd',
@@ -117,7 +136,7 @@ export const HazardReportModal: React.FC<HazardReportModalProps> = ({
     const activeCategory = CATEGORIES.find((c) => c.category === selectedCategory)!;
 
     if (locationMode === 'highway') {
-      const targetCoord = interpolateHectometerCoordinate(roadCode, hectometer, carriageway, userLocation);
+      const targetCoord = await resolveHectometerWithPDOK(roadCode, hectometer, carriageway, userLocation);
       const hectoPost: HectometerPosition = {
         road: roadCode,
         hectometer,

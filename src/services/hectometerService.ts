@@ -259,3 +259,142 @@ export function formatHectometerLabel(pos: HectometerPosition): string {
   return `${pos.road} ${pos.carriageway} ${pos.hectometer.toFixed(1)}`;
 }
 
+/**
+ * Resolves a hectometer post coordinate using the official PDOK / Rijkswaterstaat WFS API.
+ * Automatically falls back to high-accuracy local anchor interpolation if offline or timed out.
+ */
+export async function resolveHectometerWithPDOK(
+  road: string,
+  hectometer: number,
+  carriageway: CarriagewayDirection = 'Li',
+  fallbackCoord?: Coordinate
+): Promise<Coordinate> {
+  const baseCoord = interpolateHectometerCoordinate(road, hectometer, carriageway, fallbackCoord);
+
+  // PDOK bounding box around base estimate (~1.5km box)
+  const delta = 0.015;
+  const minLon = (baseCoord.longitude - delta).toFixed(4);
+  const maxLon = (baseCoord.longitude + delta).toFixed(4);
+  const minLat = (baseCoord.latitude - delta).toFixed(4);
+  const maxLat = (baseCoord.latitude + delta).toFixed(4);
+
+  const targetHectoInt = Math.round(hectometer * 10);
+  const pdokUrl = `https://service.pdok.nl/rws/nwbwegen/wfs/v1_0?request=GetFeature&service=WFS&version=2.0.0&typeName=nwbwegen:hectopunten&outputFormat=application/json&srsName=EPSG:4326&bbox=${minLon},${minLat},${maxLon},${maxLat},urn:ogc:def:crs:OGC:1.3:CRS84&count=15`;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+    const res = await fetch(pdokUrl, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.features && Array.isArray(data.features) && data.features.length > 0) {
+        // Look for matching hectometer number
+        for (const feat of data.features) {
+          const props = feat.properties || {};
+          if (props.hectomtrng === targetHectoInt) {
+            const geom = feat.geometry;
+            if (geom && geom.coordinates) {
+              const coords = Array.isArray(geom.coordinates[0]) ? geom.coordinates[0] : geom.coordinates;
+              const lon = coords[0];
+              const lat = coords[1];
+              if (typeof lon === 'number' && typeof lat === 'number') {
+                return {
+                  latitude: Number(lat.toFixed(6)),
+                  longitude: Number(lon.toFixed(6)),
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (error) {
+    // Gracefully fallback to mathematical interpolation
+  }
+
+  return baseCoord;
+}
+
+/**
+ * Attempts to detect the nearest official hectometer post using PDOK WFS API,
+ * falling back to local geometric detection.
+ */
+export async function detectNearbyHectometerPostWithPDOK(
+  userCoord: Coordinate,
+  maxDistanceMeters: number = 850
+): Promise<{
+  road: string;
+  hectometer: number;
+  carriageway: CarriagewayDirection;
+  distanceMeters: number;
+  roadName: string;
+} | null> {
+  const localDetected = detectNearbyHectometerPost(userCoord, maxDistanceMeters);
+
+  // Try refining with PDOK WFS live points
+  const delta = 0.008; // ~800m
+  const minLon = (userCoord.longitude - delta).toFixed(4);
+  const maxLon = (userCoord.longitude + delta).toFixed(4);
+  const minLat = (userCoord.latitude - delta).toFixed(4);
+  const maxLat = (userCoord.latitude + delta).toFixed(4);
+
+  const pdokUrl = `https://service.pdok.nl/rws/nwbwegen/wfs/v1_0?request=GetFeature&service=WFS&version=2.0.0&typeName=nwbwegen:hectopunten&outputFormat=application/json&srsName=EPSG:4326&bbox=${minLon},${minLat},${maxLon},${maxLat},urn:ogc:def:crs:OGC:1.3:CRS84&count=10`;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+    const res = await fetch(pdokUrl, {
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.features && Array.isArray(data.features) && data.features.length > 0) {
+        let closestFeature: any = null;
+        let closestDist = Infinity;
+
+        for (const feat of data.features) {
+          const geom = feat.geometry;
+          if (geom && geom.coordinates) {
+            const coords = Array.isArray(geom.coordinates[0]) ? geom.coordinates[0] : geom.coordinates;
+            const lon = coords[0];
+            const lat = coords[1];
+            if (typeof lon === 'number' && typeof lat === 'number') {
+              const d = getDistanceInMeters(userCoord.latitude, userCoord.longitude, lat, lon);
+              if (d < closestDist && d <= maxDistanceMeters) {
+                closestDist = d;
+                closestFeature = feat;
+              }
+            }
+          }
+        }
+
+        if (closestFeature && localDetected) {
+          const hectoVal = Number((closestFeature.properties?.hectomtrng / 10).toFixed(1));
+          return {
+            road: localDetected.road,
+            hectometer: isNaN(hectoVal) ? localDetected.hectometer : hectoVal,
+            carriageway: localDetected.carriageway,
+            distanceMeters: Math.round(closestDist),
+            roadName: localDetected.roadName,
+          };
+        }
+      }
+    }
+  } catch {
+    // Fallback
+  }
+
+  return localDetected;
+}
+
+

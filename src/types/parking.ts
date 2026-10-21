@@ -18,6 +18,10 @@ export interface ParkingSpot {
   coordinate: Coordinate;
   color: string;
   description: string;
+  facilityType?: 'garage' | 'lot' | 'bay' | 'street';
+  polygon?: Coordinate[];
+  stallDividers?: { start: Coordinate; end: Coordinate }[];
+  areaDimensions?: { widthMeters: number; lengthMeters: number; spotsCount: number };
 }
 
 export interface DestinationTarget {
@@ -103,6 +107,7 @@ export type HazardCategory =
   | 'parking_warden'
   | 'accident'
   | 'road_work'
+  | 'road_block'
   | 'debris'
   | 'traffic_jam';
 
@@ -128,4 +133,24 @@ export interface RoadHazard {
   confirmations: number;
   note?: string;
 }
+
+export interface MapIconFilterSettings {
+  showSpeedCameras: boolean; // Vaste flitspalen & trajectcontrole
+  showPolice: boolean;       // Politiecontroles & mobiele laser
+  showWardens: boolean;      // Handhaving & scan-auto's
+  showRoadworks: boolean;    // Wegwerkzaamheden & afsluitingen
+  showHazards: boolean;      // Ongevallen & gevaren op de weg
+  showParking: boolean;      // Parkeerplekken & zones
+  showPois: boolean;         // Horeca, winkels & Apple Maps POIs
+}
+
+export const DEFAULT_ICON_FILTERS: MapIconFilterSettings = {
+  showSpeedCameras: true,
+  showPolice: true,
+  showWardens: true,
+  showRoadworks: true,
+  showHazards: true,
+  showParking: true,
+  showPois: true,
+};
 

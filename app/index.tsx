@@ -8,25 +8,56 @@ import {
   Keyboard,
   Platform,
 } from 'react-native';
-import MapView, { Marker, Circle, Polyline, Region, MapType } from 'react-native-maps';
+import MapView, { Marker, Polyline, Region, MapType } from 'react-native-maps';
 import * as Location from 'expo-location';
 
-import { Coordinate, DestinationTarget, ParkingSpot, TurnManeuver, NavPhase, DriveRouteOption, CameraWarning, SpeedAlert, SpeedCamera, CameraDisplayMode, RoadHazard, SavedLocation } from '../src/types/parking';
+import {
+  Coordinate,
+  DestinationTarget,
+  ParkingSpot,
+  TurnManeuver,
+  NavPhase,
+  DriveRouteOption,
+  CameraWarning,
+  SpeedAlert,
+  SpeedCamera,
+  CameraDisplayMode,
+  RoadHazard,
+  SavedLocation,
+  MapIconFilterSettings,
+  DEFAULT_ICON_FILTERS,
+} from '../src/types/parking';
 import { scanNearbyParkingSpots } from '../src/services/parkingScanner';
+import { fetchLiveOsmParkingAreas } from '../src/services/parkingAreaService';
 import { fetchMultiDriveRoutes, fetchWalkingRoute } from '../src/services/routingService';
-import { SPEED_CAMERAS, getUpcomingCameraWarning, calculateSpeedFine } from '../src/services/cameraRadarService';
+import {
+  SPEED_CAMERAS,
+  getUpcomingCameraWarning,
+  calculateSpeedFine,
+  fetchLiveOverpassCameras,
+} from '../src/services/cameraRadarService';
 import { SearchBar } from '../src/components/SearchBar';
 import { MapToolsMenu } from '../src/components/MapToolsMenu';
 import { RouteDrawer } from '../src/components/RouteDrawer';
 import { NavigationHUD } from '../src/components/NavigationHUD';
 import { HazardReportModal } from '../src/components/HazardReportModal';
-import { getReportedHazards, addReportedHazard, confirmHazard } from '../src/services/hazardService';
+import {
+  getReportedHazards,
+  getMergedHazards,
+  addReportedHazard,
+  confirmHazard,
+  fetchLiveRoadBlockades,
+} from '../src/services/hazardService';
+import { getIconFilters, saveIconFilters } from '../src/services/iconFilterService';
+import { MapIconFilterModal } from '../src/components/MapIconFilterModal';
 import { PoiPreviewCard } from '../src/components/PoiPreviewCard';
+import { AnimatedPoiMarker } from '../src/components/AnimatedPoiMarker';
+import { AnimatedRadarPill } from '../src/components/AnimatedRadarPill';
+import { ParkingAreaOverlay } from '../src/components/ParkingAreaOverlay';
 import { getFavorites, addFavorite, removeFavorite, isFavorite } from '../src/services/favoritesService';
 import { voiceGuidance } from '../src/services/voiceGuidanceService';
 import { ScratchMapOverlay } from '../src/components/ScratchMapOverlay';
 import { MemeShakeModal } from '../src/components/MemeShakeModal';
-import { useShakeDetector } from '../src/hooks/useShakeDetector';
 import {
   loadExploredGeometry,
   addExploredCoordinate,
@@ -71,6 +102,7 @@ export default function MapScreen() {
   const [destination, setDestination] = useState<DestinationTarget | null>(null);
   const [optimalSpot, setOptimalSpot] = useState<ParkingSpot | null>(null);
   const [selectedSpot, setSelectedSpot] = useState<ParkingSpot | null>(null);
+  const [maxWalkingDistance, setMaxWalkingDistance] = useState<number>(500);
 
   // Real Road-Following Route State (via OSRM with Live Traffic alternatives)
   const [availableDriveRoutes, setAvailableDriveRoutes] = useState<DriveRouteOption[]>([]);
@@ -106,22 +138,29 @@ export default function MapScreen() {
   // Places & POI State (Cafes, Restaurants, Apple Maps Points of Interest)
   const [selectedPoi, setSelectedPoi] = useState<DestinationTarget | null>(null);
   const [favoritesList, setFavoritesList] = useState<SavedLocation[]>([]);
+  const [isSearchExpanded, setIsSearchExpanded] = useState(false);
 
-  // 6 & 7 Shaking Meme Easter Egg State
+  // 6 & 7 Shaking Meme Easter Egg State (triggered via search bar '6-7')
   const [isMemeVisible, setIsMemeVisible] = useState(false);
 
-  // Screen shake detector: triggers the 6 & 7 shaking meme when phone is shaken
-  useShakeDetector({
-    onShake: () => {
-      setIsMemeVisible(true);
-    },
-    enabled: true,
-  });
+  // Live Camera Radar & Government Data Feed state
+  const [activeCameras, setActiveCameras] = useState<SpeedCamera[]>(SPEED_CAMERAS);
+  const [isLiveFeedActive, setIsLiveFeedActive] = useState(false);
 
-  // Load active road hazards & favorites on mount
+  // User-Selected Map Icon Filters (Customizable visibility)
+  const [iconFilters, setIconFilters] = useState<MapIconFilterSettings>(DEFAULT_ICON_FILTERS);
+  const [isIconFilterModalVisible, setIsIconFilterModalVisible] = useState(false);
+
+  const handleUpdateIconFilters = (newFilters: MapIconFilterSettings) => {
+    setIconFilters(newFilters);
+    saveIconFilters(newFilters);
+  };
+
+  // Load active road hazards, favorites & saved icon filters on mount
   useEffect(() => {
     getReportedHazards().then(setReportedHazards);
     getFavorites().then(setFavoritesList);
+    getIconFilters().then(setIconFilters);
   }, []);
 
   const handleNavigateToPoi = (place: DestinationTarget) => {
@@ -211,6 +250,34 @@ export default function MapScreen() {
     }
   }, [userCoord.latitude, userCoord.longitude, isNavigating]);
 
+  const refreshLiveFeeds = async (coord?: Coordinate) => {
+    const target = coord || userCoord;
+    if (!target) return;
+    try {
+      const [liveCams, mergedHazards] = await Promise.all([
+        fetchLiveOverpassCameras(target, 12),
+        getMergedHazards(target),
+      ]);
+
+      if (liveCams.length > 0) {
+        const staticIds = new Set(SPEED_CAMERAS.map((c) => c.id));
+        const uniqueLive = liveCams.filter((c) => !staticIds.has(c.id));
+        setActiveCameras([...SPEED_CAMERAS, ...uniqueLive]);
+      }
+      setReportedHazards(mergedHazards);
+      setIsLiveFeedActive(true);
+    } catch {
+      // Graceful offline fallback
+    }
+  };
+
+  // Fetch live speed cameras, police posts, and road blockades when user location becomes available
+  useEffect(() => {
+    if (userCoord) {
+      refreshLiveFeeds(userCoord);
+    }
+  }, [userCoord.latitude, userCoord.longitude]);
+
   // Request foreground location permissions & start watch subscription
   useEffect(() => {
     let isMounted = true;
@@ -273,21 +340,38 @@ export default function MapScreen() {
     };
   }, []);
 
-  // 750m Scan Center: Focuses on destination if selected, or user location
+  // Spatial Parking Scan Center: Focuses on destination if selected, or user location
   const scanCenter: Coordinate = destination ? destination.coordinate : userCoord;
 
-  // Run the 750m spatial parking scanner & priority algorithm around the destination
-  const { spots: nearbySpots, optimalSpot: scannedOptimal } = useMemo(() => {
-    return scanNearbyParkingSpots(scanCenter);
-  }, [scanCenter]);
+  // Run spatial parking scanner & priority algorithm honoring user's chosen walking distance
+  const { spots: nearbySpots, optimalSpot: scannedOptimal, nearestFreeSpot } = useMemo(() => {
+    return scanNearbyParkingSpots(scanCenter, maxWalkingDistance);
+  }, [scanCenter, maxWalkingDistance]);
 
-  // Auto-select optimal spot when destination changes
+  // Auto-select optimal spot when destination or walking distance preference changes
   useEffect(() => {
     if (destination && scannedOptimal && !isNavigating) {
       setOptimalSpot(scannedOptimal);
       setSelectedSpot(scannedOptimal);
+
+      // In background, query real OpenStreetMap municipal parking terrain polygons
+      fetchLiveOsmParkingAreas(destination.coordinate)
+        .then((osmSpots) => {
+          if (osmSpots && osmSpots.length > 0) {
+            // Filter OSM parking locations within the user's preferred walking distance
+            const inRangeOsm = osmSpots.filter((s) => s.distanceToDestMeters <= maxWalkingDistance);
+            if (inRangeOsm.length > 0) {
+              const freeOsm = inRangeOsm.find((s) => s.type === 'free');
+              if (freeOsm && freeOsm.polygon && freeOsm.polygon.length >= 3) {
+                setOptimalSpot(freeOsm);
+                setSelectedSpot(freeOsm);
+              }
+            }
+          }
+        })
+        .catch(() => {});
     }
-  }, [destination, scannedOptimal, isNavigating]);
+  }, [destination, scannedOptimal, maxWalkingDistance, isNavigating]);
 
   // Fetch REAL ROAD-FOLLOWING ROUTES (via OSRM) with Live Traffic Alternatives
   useEffect(() => {
@@ -401,7 +485,7 @@ export default function MapScreen() {
 
   // Real-time Camera Radar Scanner & Speed Limit Adaptation
   useEffect(() => {
-    const alert = getUpcomingCameraWarning(vehiclePosition, 1500);
+    const alert = getUpcomingCameraWarning(vehiclePosition, 1500, activeCameras);
     setCameraWarning(alert);
 
     if (alert) {
@@ -413,7 +497,7 @@ export default function MapScreen() {
         currentManeuver.instruction.toLowerCase().includes('snelweg');
       setSpeedLimit(isHighway ? 100 : 50);
     }
-  }, [vehiclePosition.latitude, vehiclePosition.longitude, isNavigating, currentManeuver.street, currentManeuver.instruction]);
+  }, [vehiclePosition.latitude, vehiclePosition.longitude, activeCameras, isNavigating, currentManeuver.street, currentManeuver.instruction]);
 
   // --- Voice Guidance (TTS) Notifications ---
 
@@ -647,7 +731,9 @@ export default function MapScreen() {
         showsCompass={true}
         showsScale={true}
         showsBuildings={true}
-        showsPointsOfInterests={true}
+        showsPointsOfInterests={iconFilters.showPois}
+        toolbarEnabled={false}
+        zoomControlEnabled={false}
         scrollEnabled={true}
         zoomEnabled={true}
         rotateEnabled={true}
@@ -667,32 +753,66 @@ export default function MapScreen() {
             });
             setSelectedSpot(null);
             Keyboard.dismiss();
+
+            // Center map smoothly slightly south so venue is clearly visible above bottom preview card
+            mapRef.current?.animateToRegion(
+              {
+                latitude: coordinate.latitude - 0.002,
+                longitude: coordinate.longitude,
+                latitudeDelta: 0.01,
+                longitudeDelta: 0.01,
+              },
+              350
+            );
           }
         }}
-        onPress={async (e) => {
+        onPress={(e) => {
           if (isNavigating) return;
           Keyboard.dismiss();
 
           // Prevent double fire if onPoiClick just ran
-          if (Date.now() - lastPoiClickTimestamp.current < 600) {
+          if (Date.now() - lastPoiClickTimestamp.current < 1000) {
             return;
           }
 
-          // If a POI preview is already displayed, tap outside dismisses it
+          const coord = e.nativeEvent?.coordinate;
+          if (!coord) return;
+
+          // If a POI preview is already displayed and tap is very close to it, keep it open (only close via '✕')
           if (selectedPoi) {
-            setSelectedPoi(null);
-            setSelectedSpot(null);
-            return;
+            const dist = Math.hypot(
+              coord.latitude - selectedPoi.coordinate.latitude,
+              coord.longitude - selectedPoi.coordinate.longitude
+            );
+            if (dist < 0.0008) {
+              return;
+            }
           }
           setSelectedSpot(null);
 
-          // Apple Maps / iOS native icon & map tap detection:
-          // Apple MapKit embeds POIs into the base vector tiles. Tapping them emits onPress with coordinate.
-          // Reverse-geocoding the tapped coordinate with iOS CLGeocoder resolves the venue/business name.
-          const coord = e.nativeEvent?.coordinate;
-          if (coord) {
-            try {
-              const geocoded = await Location.reverseGeocodeAsync(coord);
+          // 1. Instant optimistic selection: animates radar beacon, pin drop & preview card immediately
+          const initialPoi: DestinationTarget = {
+            id: `poi_${Date.now()}`,
+            name: 'Interessante Locatie',
+            subtitle: 'Locatie op de kaart • Tik om te navigeren',
+            coordinate: coord,
+          };
+          setSelectedPoi(initialPoi);
+
+          // Smoothly glide camera so venue is comfortably centered in upper view
+          mapRef.current?.animateToRegion(
+            {
+              latitude: coord.latitude - 0.002,
+              longitude: coord.longitude,
+              latitudeDelta: 0.009,
+              longitudeDelta: 0.009,
+            },
+            350
+          );
+
+          // 2. Reverse-geocode in background to enrich venue name / street
+          Location.reverseGeocodeAsync(coord)
+            .then((geocoded) => {
               if (geocoded && geocoded.length > 0) {
                 const p = geocoded[0];
                 const venueName = p.name || p.street || 'Gekozen Locatie';
@@ -708,10 +828,8 @@ export default function MapScreen() {
                   coordinate: coord,
                 });
               }
-            } catch {
-              // Silently ignore geocoding failure
-            }
-          }
+            })
+            .catch(() => {});
         }}
       >
         {/* 0. THE SCRATCH MAP (FOG OF WAR) OVERLAY */}
@@ -719,16 +837,6 @@ export default function MapScreen() {
           <ScratchMapOverlay exploredGeometry={exploredGeometry} />
         )}
 
-        {/* 750m Scan Circle around Destination */}
-        {!isNavigating && (
-          <Circle
-            center={scanCenter}
-            radius={750}
-            strokeWidth={2}
-            strokeColor="rgba(59, 130, 246, 0.7)"
-            fillColor="rgba(59, 130, 246, 0.06)"
-          />
-        )}
 
         {/* Real Road-Following Polylines with Live Traffic alternatives */}
         {destination && optimalSpot && (
@@ -767,28 +875,39 @@ export default function MapScreen() {
           </>
         )}
 
-        {/* Destination Target Marker */}
-        {destination && (
-          <Marker coordinate={destination.coordinate} title={destination.name}>
-            <View style={styles.destinationMarker}>
-              <Text style={styles.destMarkerIcon}>🏁</Text>
-            </View>
-          </Marker>
+        {/* Selected Interesting Location / Venue Animated Marker */}
+        {selectedPoi && (
+          <AnimatedPoiMarker
+            coordinate={selectedPoi.coordinate}
+            name={selectedPoi.name}
+            onPress={() => {
+              mapRef.current?.animateToRegion(
+                {
+                  latitude: selectedPoi.coordinate.latitude - 0.002,
+                  longitude: selectedPoi.coordinate.longitude,
+                  latitudeDelta: 0.008,
+                  longitudeDelta: 0.008,
+                },
+                300
+              );
+            }}
+          />
         )}
 
-        {/* Optimal Free/Cheapest Parking Spot Marker */}
-        {optimalSpot && (
-          <Marker
-            coordinate={optimalSpot.coordinate}
-            title={optimalSpot.title}
-            description={optimalSpot.badge}
-            zIndex={30}
-          >
-            <View style={[styles.parkingSpotMarker, { backgroundColor: optimalSpot.color }]}>
-              <Text style={styles.parkingSpotText}>{optimalSpot.label}</Text>
-            </View>
-            <View style={[styles.markerArrow, { borderTopColor: optimalSpot.color }]} />
-          </Marker>
+        {/* Destination Target Marker with Animated Beacon */}
+        {destination && (
+          <AnimatedPoiMarker
+            coordinate={destination.coordinate}
+            name={destination.name}
+          />
+        )}
+
+        {/* Exact Dedicated Parking Area & Bay Overlay (Confined strictly to parking area - NOT the road) */}
+        {iconFilters.showParking && optimalSpot && (
+          <ParkingAreaOverlay
+            spot={optimalSpot}
+            isOptimal={true}
+          />
         )}
 
         {/* Active Vehicle Marker during In-App Navigation */}
@@ -805,71 +924,92 @@ export default function MapScreen() {
           </Marker>
         )}
 
-        {/* Real Speed Cameras & Flitsmeister Radar Traps */}
+        {/* Real Speed Cameras, Trajectcontroles & Overpass Live Radar */}
         {shouldShowCameraIcons &&
-          SPEED_CAMERAS.map((cam) => {
-            const isTraject = cam.type === 'traject';
-            const isMobile = cam.type === 'mobile';
-            const isRedLight = cam.type === 'red_light';
-            return (
-              <Marker
-                key={cam.id}
-                coordinate={cam.coordinate}
-                title={cam.name}
-                description={`${cam.road} • Max ${cam.speedLimit} km/h`}
-                zIndex={28}
-                onPress={() => {
-                  Alert.alert(
-                    `📸 ${cam.name}`,
-                    isMobile ? `🚓 ${cam.name}` : cam.name,
-                    `${cam.road}\n\nType: ${
-                      isTraject
-                        ? 'Trajectcontrole'
-                        : isMobile
-                        ? 'Mobiele Controle'
-                        ? 'Politiecontrole'
-                        : isRedLight
-                        ? 'Roodlicht & Flitser'
-                        : 'Vaste Flitspaal'
-                    }\nSnelheidslimiet: ${cam.speedLimit} km/h\n\n${cam.description}`
-                  );
-                }}
-              >
-                <View style={[styles.cameraMarkerBubble, isMobile && styles.cameraMarkerMobile]}>
-                  <Text style={styles.cameraMarkerEmoji}>
-                    {isTraject ? '⏱️' : isMobile ? '🚓' : isRedLight ? '🚦' : '📸'}
-                  </Text>
-                  <View style={styles.cameraMarkerSign}>
-                    <Text style={styles.cameraMarkerSignText}>{cam.speedLimit}</Text>
-                {isMobile ? (
-                  // Police inspection: KEEP the emoticon!
-                  <View style={styles.policeMarkerBubble}>
-                    <Text style={styles.policeMarkerEmoji}>🚓</Text>
-                    <View style={styles.cameraMarkerSign}>
-                      <Text style={styles.cameraMarkerSignText}>{cam.speedLimit}</Text>
+          activeCameras
+            .filter((cam) => {
+              if (cam.type === 'mobile') {
+                return iconFilters.showPolice;
+              }
+              return iconFilters.showSpeedCameras;
+            })
+            .map((cam) => {
+              const isTraject = cam.type === 'traject';
+              const isMobile = cam.type === 'mobile';
+              const isRedLight = cam.type === 'red_light';
+              return (
+                <Marker
+                  key={cam.id}
+                  coordinate={cam.coordinate}
+                  title={cam.name}
+                  description={`${cam.road} • Max ${cam.speedLimit} km/h`}
+                  zIndex={28}
+                  onPress={() => {
+                    Alert.alert(
+                      isMobile ? `🚓 ${cam.name}` : cam.name,
+                      `${cam.road}\n\nType: ${
+                        isTraject
+                          ? 'Trajectcontrole'
+                          : isMobile
+                          ? 'Politiecontrole'
+                          : isRedLight
+                          ? 'Roodlicht & Flitser'
+                          : 'Vaste Flitspaal'
+                      }\nSnelheidslimiet: ${cam.speedLimit} km/h\n\n${cam.description}`
+                    );
+                  }}
+                >
+                  {isMobile ? (
+                    // Police inspection: KEEP the emoticon!
+                    <View style={styles.policeMarkerBubble}>
+                      <Text style={styles.policeMarkerEmoji}>🚓</Text>
+                      <View style={styles.cameraMarkerSign}>
+                        <Text
+                          style={[
+                            styles.cameraMarkerSignText,
+                            cam.speedLimit >= 100 && styles.cameraMarkerSignText3Digit,
+                          ]}
+                        >
+                          {cam.speedLimit}
+                        </Text>
+                      </View>
                     </View>
-                  </View>
-                </View>
-                ) : (
-                  // Regular speed camera / trajectcontrole: REMOVE emoticon, show authentic European speed limit sign!
-                  <View style={styles.cameraSignOnlyBubble}>
-                    <Text style={styles.cameraSignOnlyText}>{cam.speedLimit}</Text>
-                  </View>
-                )}
-              </Marker>
-            );
-          })}
+                  ) : (
+                    // Regular speed camera / trajectcontrole: REMOVE emoticon, show authentic European speed limit sign!
+                    <View style={styles.cameraSignOnlyBubble}>
+                      <Text
+                        style={[
+                          styles.cameraSignOnlyText,
+                          cam.speedLimit >= 100 && styles.cameraSignOnlyText3Digit,
+                        ]}
+                      >
+                        {cam.speedLimit}
+                      </Text>
+                    </View>
+                  )}
+                </Marker>
+              );
+            })}
 
-        {/* Real User & Community Reported Hazards (With Hectometerpaal Badges on Highways) */}
-        {reportedHazards.map((h) => {
+        {/* Real User, Community & Overpass Live Road Hazards / Blockades */}
+        {reportedHazards
+          .filter((h) => {
+            if (h.category === 'mobile_camera') return iconFilters.showPolice;
+            if (h.category === 'parking_warden') return iconFilters.showWardens;
+            if (h.category === 'road_work' || h.category === 'road_block') return iconFilters.showRoadworks;
+            if (h.category === 'accident' || h.category === 'debris' || h.category === 'traffic_jam') return iconFilters.showHazards;
+            return true;
+          })
+          .map((h) => {
           const emoji =
             h.category === 'mobile_camera'
-              ? '📸'
               ? '🚓'
               : h.category === 'parking_warden'
               ? '👮'
               : h.category === 'accident'
               ? '🚗'
+              : h.category === 'road_block'
+              ? '⛔'
               : h.category === 'road_work'
               ? '🚧'
               : h.category === 'traffic_jam'
@@ -908,7 +1048,7 @@ export default function MapScreen() {
       </MapView>
 
       {/* 1B. POI ACTION PREVIEW CARD (When any Cafe, Restaurant, or Map POI is Tapped) */}
-      {!isNavigating && !destination && selectedPoi && (
+      {!isNavigating && selectedPoi && (
         <PoiPreviewCard
           place={selectedPoi}
           userLocation={userCoord}
@@ -926,52 +1066,50 @@ export default function MapScreen() {
           userLocation={userCoord}
           onSelectDestination={setDestination}
           onClearDestination={handleClearDestination}
+          onTriggerMeme={() => setIsMemeVisible(true)}
+          onExpandChange={setIsSearchExpanded}
         />
       )}
 
-      {/* 2B. FLOATING RADAR WARNING (When driving in passive radar mode) */}
-      {!isNavigating && cameraWarning && (
-        <View style={[styles.floatingRadarPill, cameraWarning.isUrgent && styles.floatingRadarPillUrgent]}>
-          <Text style={styles.floatingRadarEmoji}>
-            {cameraWarning.camera.type === 'traject' ? '⏱️' : cameraWarning.camera.type === 'mobile' ? '🚓' : '📸'}
-          </Text>
-          {cameraWarning.camera.type === 'mobile' ? (
-            <Text style={styles.floatingRadarEmoji}>🚓</Text>
-          ) : (
-            <View style={styles.floatingRadarSign}>
-              <Text style={styles.floatingRadarSignText}>{cameraWarning.camera.speedLimit}</Text>
-            </View>
-          )}
-          <Text style={styles.floatingRadarText} numberOfLines={1}>
-            {cameraWarning.camera.name} ({cameraWarning.distanceMeters}m) • Max {cameraWarning.camera.speedLimit} km/h
-          </Text>
-        </View>
+      {/* 2B. FLOATING RADAR WARNING (When driving in passive radar mode with drop-down animation) */}
+      {!isNavigating && !selectedPoi && cameraWarning && (
+        <AnimatedRadarPill warning={cameraWarning} />
       )}
 
-      {/* 3. CLUTTER-FREE MAP CONTROLS (Standalone Re-center + Separate Tools Menu) */}
-      <MapToolsMenu
-        mapType={mapType}
-        showTraffic={showTraffic}
-        showScratchMap={showScratchMap}
-        cameraDisplayMode={cameraDisplayMode}
-        onToggleMapType={() => setMapType((p) => (p === 'standard' ? 'satellite' : 'standard'))}
-        onToggleTraffic={() => setShowTraffic((p) => !p)}
-        onToggleScratchMap={() => setShowScratchMap((p) => !p)}
-        onCycleCameraDisplayMode={handleCycleCameraDisplayMode}
-        onOpenHazardReport={() => setIsHazardModalVisible(true)}
-        onOpenMemeShake={() => setIsMemeVisible(true)}
-        onRecenter={handleRecenter}
-        bottomOffset={isNavigating ? 140 : destination ? 260 : selectedPoi ? 190 : 100}
-      />
+      {/* 3. CLUTTER-FREE MAP CONTROLS (Zero UI Overlap: hidden during sheets, routes & inspections) */}
+      {!selectedPoi && !destination && !isSearchExpanded && !isNavigating && (
+        <MapToolsMenu
+          visible={!selectedPoi && !destination && !isSearchExpanded && !isNavigating}
+          mapType={mapType}
+          showTraffic={showTraffic}
+          showScratchMap={showScratchMap}
+          cameraDisplayMode={cameraDisplayMode}
+          isLiveFeedActive={isLiveFeedActive}
+          activeIconCount={Object.values(iconFilters).filter(Boolean).length}
+          onToggleMapType={() => setMapType((p) => (p === 'standard' ? 'satellite' : 'standard'))}
+          onToggleTraffic={() => setShowTraffic((p) => !p)}
+          onToggleScratchMap={() => setShowScratchMap((p) => !p)}
+          onCycleCameraDisplayMode={handleCycleCameraDisplayMode}
+          onOpenIconFilters={() => setIsIconFilterModalVisible(true)}
+          onOpenHazardReport={() => setIsHazardModalVisible(true)}
+          onOpenMemeShake={() => setIsMemeVisible(true)}
+          onRefreshLiveFeed={() => refreshLiveFeeds(userCoord)}
+          onRecenter={handleRecenter}
+          bottomOffset={100}
+        />
+      )}
 
       {/* 4. OVERVIEW ROUTE DRAWER (When Destination is Set) */}
-      {!isNavigating && destination && optimalSpot && (
+      {!isNavigating && !selectedPoi && destination && optimalSpot && (
         <RouteDrawer
           destination={destination}
           optimalSpot={optimalSpot}
           selectedRoute={selectedDriveRoute}
           availableRoutes={availableDriveRoutes}
+          maxWalkingDistance={maxWalkingDistance}
+          nearestFreeSpot={nearestFreeSpot}
           onSelectRoute={handleSelectDriveRoute}
+          onSelectMaxWalkingDistance={setMaxWalkingDistance}
           onStartNavigation={handleStartInAppNavigation}
           onCancel={handleClearDestination}
         />
@@ -1004,10 +1142,18 @@ export default function MapScreen() {
         onSubmitHazard={handleSubmitHazard}
       />
 
-      {/* 7. EASTER EGG: 6 & 7 SHAKING MEME MODAL (Triggered by shaking the screen) */}
+      {/* 7. EASTER EGG: 6 & 7 SHAKING MEME MODAL */}
       <MemeShakeModal
         visible={isMemeVisible}
         onClose={() => setIsMemeVisible(false)}
+      />
+
+      {/* 8. MAP ICON FILTER MODAL (Choose which icons are visible) */}
+      <MapIconFilterModal
+        visible={isIconFilterModalVisible}
+        filters={iconFilters}
+        onUpdateFilters={handleUpdateIconFilters}
+        onClose={() => setIsIconFilterModalVisible(false)}
       />
     </View>
   );
@@ -1111,9 +1257,9 @@ const styles = StyleSheet.create({
     marginRight: 4,
   },
   cameraMarkerSign: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     backgroundColor: '#ffffff',
     borderWidth: 1.5,
     borderColor: '#dc2626',
@@ -1121,9 +1267,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   cameraMarkerSignText: {
-    fontSize: 8,
+    fontSize: 8.5,
     fontWeight: '900',
     color: '#000000',
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+    lineHeight: Platform.OS === 'ios' ? 10 : undefined,
+  },
+  cameraMarkerSignText3Digit: {
+    fontSize: 7.2,
+    letterSpacing: -0.4,
   },
   policeMarkerBubble: {
     flexDirection: 'row',
@@ -1145,11 +1299,11 @@ const styles = StyleSheet.create({
     marginRight: 4,
   },
   cameraSignOnlyBubble: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: '#ffffff',
-    borderWidth: 3,
+    borderWidth: 2.5,
     borderColor: '#ef4444',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1163,11 +1317,19 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '900',
     color: '#0f172a',
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+    lineHeight: Platform.OS === 'ios' ? 13 : undefined,
+  },
+  cameraSignOnlyText3Digit: {
+    fontSize: 9.5,
+    letterSpacing: -0.5,
   },
   floatingRadarSign: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     backgroundColor: '#ffffff',
     borderWidth: 2,
     borderColor: '#ef4444',
@@ -1176,9 +1338,17 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   floatingRadarSignText: {
-    fontSize: 9,
+    fontSize: 9.5,
     fontWeight: '900',
     color: '#0f172a',
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+    lineHeight: Platform.OS === 'ios' ? 11 : undefined,
+  },
+  floatingRadarSignText3Digit: {
+    fontSize: 8,
+    letterSpacing: -0.4,
   },
   floatingRadarPill: {
     position: 'absolute',

@@ -39,6 +39,8 @@ interface SearchBarProps {
   userLocation: Coordinate;
   onSelectDestination: (destination: DestinationTarget) => void;
   onClearDestination: () => void;
+  onTriggerMeme?: () => void;
+  onExpandChange?: (expanded: boolean) => void;
 }
 
 export const SearchBar: React.FC<SearchBarProps> = ({
@@ -46,11 +48,26 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   userLocation,
   onSelectDestination,
   onClearDestination,
+  onTriggerMeme,
+  onExpandChange,
 }) => {
   const [query, setQuery] = useState('');
   const [isExpanded, setIsExpanded] = useState(false);
   const [suggestions, setSuggestions] = useState<DestinationTarget[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+
+  // 6-7 Easter egg detector: checks if user typed '6-7'
+  const checkMemeEasterEgg = (text: string): boolean => {
+    const clean = text.trim().toLowerCase();
+    if (clean === '6-7' || clean === '6 - 7' || clean === '6 7' || clean === '67') {
+      onTriggerMeme?.();
+      setQuery('');
+      Keyboard.dismiss();
+      collapseSheet();
+      return true;
+    }
+    return false;
+  };
 
   // Home, Favorites & Recents state
   const [homeLocation, setHomeLoc] = useState<SavedLocation | null>(null);
@@ -64,9 +81,26 @@ export const SearchBar: React.FC<SearchBarProps> = ({
 
   const inputRef = useRef<TextInput>(null);
 
-  // Load Home, Favorites, and Recents on mount
+  // Smooth entrance animation when appearing on screen
+  const entranceSlide = useRef(new Animated.Value(90)).current;
+  const entranceFade = useRef(new Animated.Value(0)).current;
+
+  // Load Home, Favorites, and Recents on mount + trigger entrance animation
   useEffect(() => {
     loadSavedData();
+    Animated.parallel([
+      Animated.spring(entranceSlide, {
+        toValue: 0,
+        tension: 70,
+        friction: 9,
+        useNativeDriver: false,
+      }),
+      Animated.timing(entranceFade, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: false,
+      }),
+    ]).start();
   }, []);
 
   const loadSavedData = async () => {
@@ -116,6 +150,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   // Expansion / Collapse animation helpers
   const expandSheet = () => {
     setIsExpanded(true);
+    onExpandChange?.(true);
     Animated.spring(animatedHeight, {
       toValue: EXPANDED_HEIGHT,
       useNativeDriver: false,
@@ -126,6 +161,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
 
   const collapseSheet = () => {
     setIsExpanded(false);
+    onExpandChange?.(false);
     Keyboard.dismiss();
     Animated.spring(animatedHeight, {
       toValue: COLLAPSED_HEIGHT,
@@ -264,7 +300,16 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   };
 
   return (
-    <Animated.View style={[styles.bottomSheet, { height: animatedHeight }]}>
+    <Animated.View
+      style={[
+        styles.bottomSheet,
+        {
+          height: animatedHeight,
+          opacity: entranceFade,
+          transform: [{ translateY: entranceSlide }],
+        },
+      ]}
+    >
       {/* Apple Liquid Glass Frosted Blur Foundation */}
       <BlurView
         intensity={Platform.OS === 'ios' ? 82 : 96}
@@ -300,6 +345,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             value={query}
             onChangeText={(text) => {
               setQuery(text);
+              if (checkMemeEasterEgg(text)) return;
               if (!isExpanded) expandSheet();
             }}
             onFocus={() => {
@@ -310,6 +356,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             style={styles.input}
             returnKeyType="search"
             onSubmitEditing={() => {
+              if (checkMemeEasterEgg(query)) return;
               if (suggestions.length > 0) {
                 handleSelect(suggestions[0]);
               }
@@ -348,6 +395,37 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           {/* A. Live Search Suggestions (When typing) */}
           {query.trim().length > 0 ? (
             <View style={styles.section}>
+              {/* If user types 6 or 6-, offer the 6-7 shaking meme card directly */}
+              {query.trim().startsWith('6') && (
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    onTriggerMeme?.();
+                    setQuery('');
+                    Keyboard.dismiss();
+                    collapseSheet();
+                  }}
+                  style={styles.resultCard}
+                >
+                  <View style={[styles.resultIconBubble, { backgroundColor: '#fef08a' }]}>
+                    <Text style={styles.resultPinIcon}>💥</Text>
+                  </View>
+
+                  <View style={styles.resultTextCol}>
+                    <Text style={[styles.resultStreetName, { color: '#b45309', fontWeight: '800' }]}>
+                      6 & 7 Shaking Meme 💥
+                    </Text>
+                    <Text style={styles.resultCitySubtitle}>
+                      Geheime Easter Egg • Typ '6-7' of tik hier!
+                    </Text>
+                  </View>
+
+                  <View style={[styles.distBadge, { backgroundColor: '#fef3c7' }]}>
+                    <Text style={[styles.distBadgeText, { color: '#b45309' }]}>MEME</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>
                   {suggestions.length > 0
