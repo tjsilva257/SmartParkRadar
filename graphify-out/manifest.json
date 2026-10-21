@@ -1,9 +1,9 @@
 {
   "App.tsx": {
-    "mtime": 1788881287.4582026,
-    "seen": 1792507013.2783263,
-    "ast_hash": "f900cb0e40b9be41ccbdff0bfa84426a",
-    "semantic_hash": "f900cb0e40b9be41ccbdff0bfa84426a"
+    "mtime": 1792518981.4896326,
+    "seen": 1792582218.7994745,
+    "ast_hash": "4effff420166105ea75e38f48ccfcc9a",
+    "semantic_hash": "4effff420166105ea75e38f48ccfcc9a"
   },
   "app.json": {
     "mtime": 1788885574.5375388,
@@ -30,10 +30,10 @@
     "semantic_hash": "4b19c330825dd0177d8537241886c489"
   },
   "package.json": {
-    "mtime": 1789029034.036579,
-    "seen": 1792507013.2783425,
-    "ast_hash": "ea1a5cd5ee6853535b9a77572b5a11d5",
-    "semantic_hash": "ea1a5cd5ee6853535b9a77572b5a11d5"
+    "mtime": 1792518364.9874985,
+    "seen": 1792582218.799501,
+    "ast_hash": "f3e2e2d332ca4fb5c73a693a93c5c110",
+    "semantic_hash": "f3e2e2d332ca4fb5c73a693a93c5c110"
   },
   "src/components/AnimatedPoiMarker.tsx": {
     "mtime": 1789039493.7704568,
@@ -214,5 +214,173 @@
     "seen": 1792507013.278415,
     "ast_hash": "11082f7bba6dfa909e2c6a4bfe089098",
     "semantic_hash": "11082f7bba6dfa909e2c6a4bfe089098"
+  },
+  "rework/MapScreen.tsx": {
+    "mtime": 1792574946.2273364,
+    "seen": 1792582218.7995048,
+    "ast_hash": "0c8a9d16179def2401144302bdd74f2e",
+    "semantic_hash": "0c8a9d16179def2401144302bdd74f2e"
+  },
+  "rework/components/MapControls.tsx": {
+    "mtime": 1792519646.9125552,
+    "seen": 1792582218.7995071,
+    "ast_hash": "e01e37434ef55870f88d37b90aff4436",
+    "semantic_hash": "e01e37434ef55870f88d37b90aff4436"
+  },
+  "rework/components/MapLayers.tsx": {
+    "mtime": 1792574676.424454,
+    "seen": 1792582218.7995102,
+    "ast_hash": "65225a34d4558c645647e3da5337f151",
+    "semantic_hash": "65225a34d4558c645647e3da5337f151"
+  },
+  "rework/components/MapSettingsSheet.tsx": {
+    "mtime": 1792574989.6531186,
+    "seen": 1792582218.7995126,
+    "ast_hash": "f451213ab97f0f698416156fd3491915",
+    "semantic_hash": "f451213ab97f0f698416156fd3491915"
+  },
+  "rework/components/MemeShake.tsx": {
+    "mtime": 1792574989.4180503,
+    "seen": 1792582218.7995152,
+    "ast_hash": "a5d82adc8ce2b989fd58e720a5a96ca3",
+    "semantic_hash": "a5d82adc8ce2b989fd58e720a5a96ca3"
+  },
+  "rework/components/NavigationView.tsx": {
+    "mtime": 1792574654.108683,
+    "seen": 1792582218.799518,
+    "ast_hash": "613844d7ec83c9932eab03707a0a7eb3",
+    "semantic_hash": "613844d7ec83c9932eab03707a0a7eb3"
+  },
+  "rework/components/PlaceCard.tsx": {
+    "mtime": 1792574662.3237298,
+    "seen": 1792582218.79952,
+    "ast_hash": "17f8628c9693f1876c395d120a47f8f3",
+    "semantic_hash": "17f8628c9693f1876c395d120a47f8f3"
+  },
+  "rework/components/ReportSheet.tsx": {
+    "mtime": 1792574883.8951366,
+    "seen": 1792582218.799525,
+    "ast_hash": "b28f30cdfc056b7b687fd89c30134fae",
+    "semantic_hash": "b28f30cdfc056b7b687fd89c30134fae"
+  },
+  "rework/components/RoutePlanner.tsx": {
+    "mtime": 1792519524.535244,
+    "seen": 1792582218.7995267,
+    "ast_hash": "ebfb425e4a0a114831732f9ada2e4eb9",
+    "semantic_hash": "ebfb425e4a0a114831732f9ada2e4eb9"
+  },
+  "rework/components/SearchSheet.tsx": {
+    "mtime": 1792574606.9379525,
+    "seen": 1792582218.7995286,
+    "ast_hash": "c7018c08671492ae290ae328172f7523",
+    "semantic_hash": "c7018c08671492ae290ae328172f7523"
+  },
+  "rework/components/Sheet.tsx": {
+    "mtime": 1792574705.1724193,
+    "seen": 1792582218.7995305,
+    "ast_hash": "825be5b822632f5e411c7cbb3ae18ea4",
+    "semantic_hash": "825be5b822632f5e411c7cbb3ae18ea4"
+  },
+  "rework/components/glyphs.ts": {
+    "mtime": 1792518949.7153232,
+    "seen": 1792582218.7995322,
+    "ast_hash": "66293dd981a60ed6bfeaad3b5eb7b806",
+    "semantic_hash": "66293dd981a60ed6bfeaad3b5eb7b806"
+  },
+  "rework/components/ui.tsx": {
+    "mtime": 1792574630.0387607,
+    "seen": 1792582218.7995346,
+    "ast_hash": "b7d6564adadf4acd032913dc99d57b43",
+    "semantic_hash": "b7d6564adadf4acd032913dc99d57b43"
+  },
+  "rework/hooks/useTripSimulation.ts": {
+    "mtime": 1792576846.3409655,
+    "seen": 1792582218.799537,
+    "ast_hash": "dee0f39bf689528f0faadacf1ba47aa4",
+    "semantic_hash": "dee0f39bf689528f0faadacf1ba47aa4"
+  },
+  "rework/lib/geo.ts": {
+    "mtime": 1792518567.1030314,
+    "seen": 1792582218.799539,
+    "ast_hash": "ebf5821a252a2aceee25ec3521ffec04",
+    "semantic_hash": "ebf5821a252a2aceee25ec3521ffec04"
+  },
+  "rework/lib/http.ts": {
+    "mtime": 1792526294.3117154,
+    "seen": 1792582218.799541,
+    "ast_hash": "f3729ae5fdd7a52237d775fb922353cd",
+    "semantic_hash": "f3729ae5fdd7a52237d775fb922353cd"
+  },
+  "rework/lib/store.ts": {
+    "mtime": 1792526294.4199455,
+    "seen": 1792582218.7995427,
+    "ast_hash": "4f903a215c0d7ab70aacd145061a62b0",
+    "semantic_hash": "4f903a215c0d7ab70aacd145061a62b0"
+  },
+  "rework/services/cameras.ts": {
+    "mtime": 1792519706.8293195,
+    "seen": 1792582218.799545,
+    "ast_hash": "3c8f9df5c4e5e860452de3bb6542603c",
+    "semantic_hash": "3c8f9df5c4e5e860452de3bb6542603c"
+  },
+  "rework/services/hazards.ts": {
+    "mtime": 1792577195.9653547,
+    "seen": 1792582218.799547,
+    "ast_hash": "52efe378cb83189db4560bd49dea2ccd",
+    "semantic_hash": "52efe378cb83189db4560bd49dea2ccd"
+  },
+  "rework/services/hectometer.ts": {
+    "mtime": 1792576763.9898577,
+    "seen": 1792582218.7995489,
+    "ast_hash": "2e2f608b4203049c6f24a8fce14c7f93",
+    "semantic_hash": "2e2f608b4203049c6f24a8fce14c7f93"
+  },
+  "rework/services/parking.ts": {
+    "mtime": 1792519639.3960745,
+    "seen": 1792582218.799551,
+    "ast_hash": "b8626ae4f585b45bb1e60a189a306dd8",
+    "semantic_hash": "b8626ae4f585b45bb1e60a189a306dd8"
+  },
+  "rework/services/places.ts": {
+    "mtime": 1792575016.553765,
+    "seen": 1792582218.799553,
+    "ast_hash": "cc59ac471be6af1305112925742a5d4d",
+    "semantic_hash": "cc59ac471be6af1305112925742a5d4d"
+  },
+  "rework/services/routing.ts": {
+    "mtime": 1792519677.5012825,
+    "seen": 1792582218.7995548,
+    "ast_hash": "0e9855596fcb9054cf64c40e5cb0db5b",
+    "semantic_hash": "0e9855596fcb9054cf64c40e5cb0db5b"
+  },
+  "rework/services/saved.ts": {
+    "mtime": 1792519679.872423,
+    "seen": 1792582218.7995572,
+    "ast_hash": "cc9866feec39a9deb3f4c304049cc05b",
+    "semantic_hash": "cc9866feec39a9deb3f4c304049cc05b"
+  },
+  "rework/services/scratchMap.ts": {
+    "mtime": 1792525108.3496852,
+    "seen": 1792582218.7995586,
+    "ast_hash": "2e4e1d8bedf04ae5ea5b727149e96de9",
+    "semantic_hash": "2e4e1d8bedf04ae5ea5b727149e96de9"
+  },
+  "rework/services/voice.ts": {
+    "mtime": 1792519710.8694887,
+    "seen": 1792582218.7995603,
+    "ast_hash": "0a33cf532bfcaa7c058345a58925a045",
+    "semantic_hash": "0a33cf532bfcaa7c058345a58925a045"
+  },
+  "rework/theme.ts": {
+    "mtime": 1792518693.363942,
+    "seen": 1792582218.799562,
+    "ast_hash": "aebc253a020653451bd5e6f38893b2ff",
+    "semantic_hash": "aebc253a020653451bd5e6f38893b2ff"
+  },
+  "rework/types.ts": {
+    "mtime": 1792519212.5870411,
+    "seen": 1792582218.7995634,
+    "ast_hash": "c49c76d6d5932245f3207be4ed02fa38",
+    "semantic_hash": "c49c76d6d5932245f3207be4ed02fa38"
   }
 }
